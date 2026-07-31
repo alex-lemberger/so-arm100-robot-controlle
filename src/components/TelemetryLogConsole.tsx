@@ -94,7 +94,7 @@ export const TelemetryLogConsole: React.FC<TelemetryLogConsoleProps> = ({
             value={customCmd}
             onChange={(e) => setCustomCmd(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Type raw Feetech ASCII serial command (e.g. #1P2048T500! or READ_VOLT)..."
+            placeholder="Raw text command for a WebSocket bridge (not direct USB Feetech)…"
             className="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-sm px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-amber-400"
           />
           <button

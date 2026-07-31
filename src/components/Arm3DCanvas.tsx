@@ -6,19 +6,14 @@ import { Maximize2, RotateCcw, Eye, Layers, Compass, Box } from 'lucide-react';
 
 interface Arm3DCanvasProps {
   joints: JointState;
-  onJointChange?: (newJoints: JointState) => void;
-  targetPos?: CartesianPos;
   showTrajectory?: boolean;
   trajectoryPoints?: CartesianPos[];
-  activeKeyframeIndex?: number;
 }
 
 export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
   joints,
-  onJointChange,
   showTrajectory = true,
-  trajectoryPoints = [],
-  activeKeyframeIndex = -1
+  trajectoryPoints = []
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -35,6 +30,8 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
   const rightClawRef = useRef<THREE.Mesh | null>(null);
   const targetMeshRef = useRef<THREE.Mesh | null>(null);
   const trajectoryLineRef = useRef<THREE.Line | null>(null);
+  const renderFrameRef = useRef<number | null>(null);
+  const requestRenderRef = useRef<() => void>(() => {});
 
   // Orbit state
   const isDraggingRef = useRef(false);
@@ -42,9 +39,9 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
   const cameraAngleRef = useRef({ alpha: Math.PI / 4, beta: Math.PI / 6, distance: 450 });
 
   const [cameraMode, setCameraMode] = useState<'perspective' | 'top' | 'side' | 'front'>('perspective');
+  const cameraModeRef = useRef(cameraMode);
   const [showGrid, setShowGrid] = useState(true);
   const [showReachDome, setShowReachDome] = useState(false);
-  const [payloadActive, setPayloadActive] = useState(true);
 
   // Calculated End Effector Pos
   const endPos = forwardKinematics(joints);
@@ -283,6 +280,7 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
 
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
       updateCameraPosition();
+      requestRenderRef.current();
     };
 
     const handleMouseUp = () => {
@@ -293,6 +291,7 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
       e.preventDefault();
       cameraAngleRef.current.distance = Math.max(150, Math.min(900, cameraAngleRef.current.distance + e.deltaY * 0.5));
       updateCameraPosition();
+      requestRenderRef.current();
     };
 
     container.addEventListener('mousedown', handleMouseDown);
@@ -300,15 +299,20 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
     window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('wheel', handleWheel, { passive: false });
 
-    // 7. Animation Loop
-    let animationFrameId: number;
-    const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
+    // 7. Render only after a scene change instead of continuously at 60 FPS.
+    const render = () => {
+      renderFrameRef.current = null;
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
     };
-    animate();
+    const requestRender = () => {
+      if (renderFrameRef.current === null) {
+        renderFrameRef.current = requestAnimationFrame(render);
+      }
+    };
+    requestRenderRef.current = requestRender;
+    requestRender();
 
     // 8. Handle Window Resize
     const handleResize = () => {
@@ -318,17 +322,26 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
+      requestRender();
     };
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
+      if (renderFrameRef.current !== null) {
+        cancelAnimationFrame(renderFrameRef.current);
+      }
+      renderFrameRef.current = null;
+      requestRenderRef.current = () => {};
       resizeObserver.disconnect();
       container.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       container.removeEventListener('wheel', handleWheel);
+      if (trajectoryLineRef.current) {
+        trajectoryLineRef.current.geometry.dispose();
+        (trajectoryLineRef.current.material as THREE.Material).dispose();
+      }
       if (rendererRef.current && rendererRef.current.domElement) {
         rendererRef.current.dispose();
       }
@@ -340,13 +353,13 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
     if (!cameraRef.current) return;
     const { alpha, beta, distance } = cameraAngleRef.current;
 
-    if (cameraMode === 'top') {
+    if (cameraModeRef.current === 'top') {
       cameraRef.current.position.set(0, distance, 1);
       cameraRef.current.lookAt(0, 80, 0);
-    } else if (cameraMode === 'side') {
+    } else if (cameraModeRef.current === 'side') {
       cameraRef.current.position.set(distance, 120, 0);
       cameraRef.current.lookAt(0, 100, 0);
-    } else if (cameraMode === 'front') {
+    } else if (cameraModeRef.current === 'front') {
       cameraRef.current.position.set(0, 120, distance);
       cameraRef.current.lookAt(0, 100, 0);
     } else {
@@ -359,7 +372,9 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
   };
 
   useEffect(() => {
+    cameraModeRef.current = cameraMode;
     updateCameraPosition();
+    requestRenderRef.current();
   }, [cameraMode]);
 
   // Update Joint Rotations in Three.js Scene whenever `joints` prop changes
@@ -396,6 +411,7 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
       const grid = sceneRef.current.getObjectByName('grid');
       if (grid) grid.visible = showGrid;
     }
+    requestRenderRef.current();
   }, [joints, showReachDome, showGrid]);
 
   // Trajectory Line Overlay
@@ -405,6 +421,7 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
     if (trajectoryLineRef.current) {
       sceneRef.current.remove(trajectoryLineRef.current);
       trajectoryLineRef.current.geometry.dispose();
+      (trajectoryLineRef.current.material as THREE.Material).dispose();
       trajectoryLineRef.current = null;
     }
 
@@ -422,12 +439,14 @@ export const Arm3DCanvas: React.FC<Arm3DCanvasProps> = ({
       sceneRef.current.add(line);
       trajectoryLineRef.current = line;
     }
+    requestRenderRef.current();
   }, [showTrajectory, trajectoryPoints]);
 
   const resetCamera = () => {
     cameraAngleRef.current = { alpha: Math.PI / 4, beta: Math.PI / 6, distance: 450 };
     setCameraMode('perspective');
     updateCameraPosition();
+    requestRenderRef.current();
   };
 
   return (

@@ -37,7 +37,17 @@ export const LeaderArmPanel: React.FC<LeaderArmPanelProps> = ({
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [recordedFrames, setRecordedFrames] = useState<Keyframe[]>([]);
   const [recordingTimer, setRecordingTimer] = useState(0);
-  const [simulatedLeaderAngle, setSimulatedLeaderAngle] = useState<JointState>(followerJoints);
+  const leaderJointsRef = useRef(leaderState.joints);
+  const recordedFrameCountRef = useRef(0);
+  const onUpdateLeaderStateRef = useRef(onUpdateLeaderState);
+
+  useEffect(() => {
+    leaderJointsRef.current = leaderState.joints;
+  }, [leaderState.joints]);
+
+  useEffect(() => {
+    onUpdateLeaderStateRef.current = onUpdateLeaderState;
+  }, [onUpdateLeaderState]);
 
   // Recording timer logic
   useEffect(() => {
@@ -49,21 +59,22 @@ export const LeaderArmPanel: React.FC<LeaderArmPanelProps> = ({
         // Record frame snapshot
         const newKf: Keyframe = {
           id: `kf-rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-          name: `Hand Demo Pose ${recordedFrames.length + 1}`,
+          name: `Hand Demo Pose ${recordedFrameCountRef.current + 1}`,
           durationMs: 250,
           delayAfterMs: 0,
-          joints: { ...leaderState.joints }
+          joints: { ...leaderJointsRef.current }
         };
 
+        recordedFrameCountRef.current += 1;
         setRecordedFrames(prev => [...prev, newKf]);
-        onUpdateLeaderState({ recordedFramesCount: recordedFrames.length + 1 });
+        onUpdateLeaderStateRef.current({ recordedFramesCount: recordedFrameCountRef.current });
       }, 250); // 4 FPS recording snapshot rate
     } else {
       setRecordingTimer(0);
     }
 
     return () => clearInterval(interval);
-  }, [leaderState.isRecording, leaderState.joints, recordedFrames.length]);
+  }, [leaderState.isRecording]);
 
   // Handle connection simulation or WebSerial connect for Leader
   const handleConnectLeaderSerial = async () => {
@@ -116,6 +127,7 @@ export const LeaderArmPanel: React.FC<LeaderArmPanelProps> = ({
   };
 
   const handleStartRecording = () => {
+    recordedFrameCountRef.current = 0;
     setRecordedFrames([]);
     onUpdateLeaderState({ isRecording: true });
   };

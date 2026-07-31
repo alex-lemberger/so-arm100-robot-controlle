@@ -3,32 +3,112 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { JointState, Sequence, ConnectionType, ConnectionStatus, TelemetryData, LeaderArmState, Keyframe } from './types';
-import { DEFAULT_JOINTS, PRESET_SEQUENCES } from './constants';
+import React, { lazy, Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { JointState, Sequence, ConnectionType, ConnectionStatus, TelemetryData, LeaderArmState, Keyframe, ServoId } from './types';
+import { DEFAULT_JOINTS, PRESET_SEQUENCES, SO_ARM100_SERVOS } from './constants';
 import { interpolateJoints, formatSerialCommand, forwardKinematics } from './utils/kinematics';
+import { buildPingPacket, buildReadPacket, buildSyncGoalPositionPacket, bytesToHex, FeetechPacket, parseFeetechPackets } from './utils/feetech';
 import { ConnectionBar } from './components/ConnectionBar';
-import { Arm3DCanvas } from './components/Arm3DCanvas';
-import { JointControls } from './components/JointControls';
-import { KinematicsIKPanel } from './components/KinematicsIKPanel';
-import { SequenceStudio } from './components/SequenceStudio';
-import { GamepadVisionOverlay } from './components/GamepadVisionOverlay';
-import { LeaderArmPanel } from './components/LeaderArmPanel';
-import { AISequenceGenerator } from './components/AISequenceGenerator';
-import { TelemetryLogConsole } from './components/TelemetryLogConsole';
 import { ShieldAlert, Zap, Cpu, Sparkles, Sliders, Target, Layers, Radio } from 'lucide-react';
+
+const Arm3DCanvas = lazy(() => import('./components/Arm3DCanvas').then(module => ({ default: module.Arm3DCanvas })));
+const JointControls = lazy(() => import('./components/JointControls').then(module => ({ default: module.JointControls })));
+const KinematicsIKPanel = lazy(() => import('./components/KinematicsIKPanel').then(module => ({ default: module.KinematicsIKPanel })));
+const SequenceStudio = lazy(() => import('./components/SequenceStudio').then(module => ({ default: module.SequenceStudio })));
+const GamepadVisionOverlay = lazy(() => import('./components/GamepadVisionOverlay').then(module => ({ default: module.GamepadVisionOverlay })));
+const LeaderArmPanel = lazy(() => import('./components/LeaderArmPanel').then(module => ({ default: module.LeaderArmPanel })));
+const AISequenceGenerator = lazy(() => import('./components/AISequenceGenerator').then(module => ({ default: module.AISequenceGenerator })));
+const TelemetryLogConsole = lazy(() => import('./components/TelemetryLogConsole').then(module => ({ default: module.TelemetryLogConsole })));
+
+const HARDWARE_COMMAND_INTERVAL_MS = 50;
+const FEETECH_REPLY_TIMEOUT_MS = 300;
+
+type FeetechCalibration = Record<ServoId, { minTick: number; maxTick: number; homingOffset: number }>;
+
+function readFeetechCalibration(): FeetechCalibration | null {
+  const raw = import.meta.env.VITE_FEETECH_CALIBRATION;
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<FeetechCalibration>;
+    const isValid = SO_ARM100_SERVOS.every((servo) => {
+      const calibration = parsed[servo.id];
+      return calibration
+        && Number.isFinite(calibration.minTick)
+        && Number.isFinite(calibration.maxTick)
+        && calibration.minTick >= 0
+        && calibration.minTick <= 4095
+        && calibration.maxTick >= 0
+        && calibration.maxTick <= 4095
+        && calibration.minTick !== calibration.maxTick
+        && Number.isInteger(calibration.homingOffset)
+        && Math.abs(calibration.homingOffset) <= 2047;
+    });
+    return isValid ? parsed as FeetechCalibration : null;
+  } catch {
+    return null;
+  }
+}
+
+function jointsToCalibratedTicks(joints: JointState, calibration: FeetechCalibration) {
+  return SO_ARM100_SERVOS.map((servo) => {
+    const value = joints[servo.id];
+    const normalized = Math.max(0, Math.min(1, (value - servo.minAngle) / (servo.maxAngle - servo.minAngle)));
+    const ticks = calibration[servo.id].minTick
+      + normalized * (calibration[servo.id].maxTick - calibration[servo.id].minTick);
+    return { id: servo.hardwareId, position: Math.round(ticks) };
+  });
+}
+
+function calibratedTicksToJoints(positions: Record<number, number>, calibration: FeetechCalibration): JointState | null {
+  const next = { ...DEFAULT_JOINTS };
+  for (const servo of SO_ARM100_SERVOS) {
+    const position = positions[servo.hardwareId];
+    if (!Number.isFinite(position)) return null;
+    const { minTick, maxTick } = calibration[servo.id];
+    const normalized = (position - minTick) / (maxTick - minTick);
+    next[servo.id] = Math.max(
+      servo.minAngle,
+      Math.min(servo.maxAngle, servo.minAngle + normalized * (servo.maxAngle - servo.minAngle)),
+    );
+  }
+  return next;
+}
+
+function decodeFeetechSignMagnitude(encodedValue: number, signBit = 11) {
+  const magnitude = encodedValue & ((1 << signBit) - 1);
+  return (encodedValue & (1 << signBit)) === 0 ? magnitude : -magnitude;
+}
+
+const LoadingPanel = () => (
+  <div className="min-h-28 rounded-sm border border-zinc-800 bg-zinc-900 animate-pulse" aria-label="Loading panel" />
+);
 
 export default function App() {
   // 1. Core Robot State
   const [joints, setJoints] = useState<JointState>(DEFAULT_JOINTS);
   const [isTorqueEnabled, setIsTorqueEnabled] = useState(true);
+  const jointsRef = useRef<JointState>(DEFAULT_JOINTS);
 
   // 2. Connectivity State
   const [connectionType, setConnectionType] = useState<ConnectionType>('simulation');
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
+  const [verifiedServoIds, setVerifiedServoIds] = useState<number[]>([]);
+  const [servoPositions, setServoPositions] = useState<Record<number, number>>({});
+  const [isCalibrationVerified, setIsCalibrationVerified] = useState(false);
+  const [isMotionArmed, setIsMotionArmed] = useState(false);
   const portWriterRef = useRef<any>(null);
   const serialPortRef = useRef<any>(null);
+  const serialReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const serialReadLoopActiveRef = useRef(false);
+  const serialRxBufferRef = useRef<Uint8Array>(new Uint8Array());
+  const pendingFeetechResponsesRef = useRef(new Map<number, (packet: FeetechPacket) => void>());
   const wsClientRef = useRef<WebSocket | null>(null);
+  const pendingHardwareJointsRef = useRef<JointState | null>(null);
+  const hardwareCommandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHardwareCommandAtRef = useRef(0);
+  const hardwareMotionBlockReasonRef = useRef<string | null>(null);
+  const feetechCalibration = useMemo(readFeetechCalibration, []);
 
   // 3. Telemetry State
   const [telemetry, setTelemetry] = useState<TelemetryData>({
@@ -81,32 +161,158 @@ export default function App() {
     }));
   }, []);
 
-  // Send raw serial string over WebSerial or WebSocket if connected
-  const sendSerialCommand = useCallback(async (cmdString: string) => {
-    logMessage(cmdString, 'tx');
+  // Text commands are intended for a controller bridge on WebSocket. Direct WebSerial
+  // talks the Feetech binary bus and must not receive made-up ASCII commands.
+  const sendSerialCommand = useCallback(async (cmdString: string, shouldLog = true) => {
+    if (shouldLog) {
+      logMessage(cmdString, 'tx');
+    }
 
     if (portWriterRef.current) {
-      try {
-        const encoder = new TextEncoder();
-        await portWriterRef.current.write(encoder.encode(cmdString + '\n'));
-      } catch (err: any) {
-        logMessage(`WebSerial TX Error: ${err.message}`, 'error');
-      }
+      logMessage('Direct WebSerial uses Feetech binary packets; raw ASCII commands are only supported through a WebSocket bridge.', 'warn');
     } else if (wsClientRef.current && wsClientRef.current.readyState === WebSocket.OPEN) {
       wsClientRef.current.send(cmdString);
     }
   }, [logMessage]);
 
-  // Handle Joint change from FK sliders, IK solver, or Gamepad
-  const handleJointChange = useCallback((newJoints: JointState) => {
-    setJoints(newJoints);
-
-    // If physical hardware connected, format & send serial command
-    if (connectionType !== 'simulation') {
-      const serialCmd = formatSerialCommand(newJoints, 100);
-      sendSerialCommand(serialCmd);
+  const sendFeetechPacket = useCallback(async (packet: Uint8Array, description: string, shouldLog = true) => {
+    if (!portWriterRef.current) {
+      throw new Error('No direct WebSerial connection is open.');
     }
-  }, [connectionType, sendSerialCommand]);
+
+    if (shouldLog) logMessage(`${description}: ${bytesToHex(packet)}`, 'tx');
+    await portWriterRef.current.write(packet);
+  }, [logMessage]);
+
+  const processFeetechPacket = useCallback((packet: FeetechPacket) => {
+    const resolver = pendingFeetechResponsesRef.current.get(packet.id);
+    if (resolver) {
+      pendingFeetechResponsesRef.current.delete(packet.id);
+      resolver(packet);
+    }
+  }, []);
+
+  const startSerialReader = useCallback(async (port: any) => {
+    if (!port.readable) return;
+
+    const reader = port.readable.getReader();
+    serialReaderRef.current = reader;
+    serialReadLoopActiveRef.current = true;
+
+    try {
+      while (serialReadLoopActiveRef.current) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        const combined = new Uint8Array(serialRxBufferRef.current.length + value.length);
+        combined.set(serialRxBufferRef.current);
+        combined.set(value, serialRxBufferRef.current.length);
+        const { packets, remainder } = parseFeetechPackets(combined);
+        serialRxBufferRef.current = remainder.length > 1024 ? remainder.slice(-1024) : remainder;
+
+        packets.forEach(processFeetechPacket);
+      }
+    } catch (err: any) {
+      if (serialReadLoopActiveRef.current) {
+        logMessage(`WebSerial receive error: ${err.message}`, 'error');
+      }
+    } finally {
+      if (serialReaderRef.current === reader) serialReaderRef.current = null;
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+  }, [logMessage, processFeetechPacket]);
+
+  const waitForFeetechResponse = useCallback((servoId: number, timeoutMs = FEETECH_REPLY_TIMEOUT_MS) => (
+    new Promise<FeetechPacket | null>((resolve) => {
+      const timeout = window.setTimeout(() => {
+        pendingFeetechResponsesRef.current.delete(servoId);
+        resolve(null);
+      }, timeoutMs);
+
+      pendingFeetechResponsesRef.current.set(servoId, (packet) => {
+        window.clearTimeout(timeout);
+        resolve(packet);
+      });
+    })
+  ), []);
+
+  const clearQueuedHardwareMotion = useCallback(() => {
+    pendingHardwareJointsRef.current = null;
+    if (hardwareCommandTimerRef.current !== null) {
+      clearTimeout(hardwareCommandTimerRef.current);
+      hardwareCommandTimerRef.current = null;
+    }
+  }, []);
+
+  // Coalesce motion updates into a bounded 20 Hz hardware command stream.
+  const queueHardwareMotion = useCallback((newJoints: JointState, durationMs = 100) => {
+    if (connectionType === 'simulation') return;
+
+    if (connectionType === 'webserial') {
+      if (!feetechCalibration || !isMotionArmed) {
+        const reason = !feetechCalibration
+          ? 'Direct motion is locked: add a valid VITE_FEETECH_CALIBRATION before sending position packets.'
+          : 'Direct motion is locked: verify the servo bus, then explicitly arm calibrated motion.';
+        if (hardwareMotionBlockReasonRef.current !== reason) {
+          hardwareMotionBlockReasonRef.current = reason;
+          logMessage(reason, 'warn');
+        }
+        return;
+      }
+    }
+
+    pendingHardwareJointsRef.current = newJoints;
+    if (hardwareCommandTimerRef.current !== null) return;
+
+    const flush = () => {
+      hardwareCommandTimerRef.current = null;
+      const pendingJoints = pendingHardwareJointsRef.current;
+      pendingHardwareJointsRef.current = null;
+      if (!pendingJoints) return;
+
+      lastHardwareCommandAtRef.current = performance.now();
+      if (connectionType === 'webserial' && feetechCalibration) {
+        sendFeetechPacket(
+          buildSyncGoalPositionPacket(jointsToCalibratedTicks(pendingJoints, feetechCalibration), durationMs),
+          'SYNC_WRITE goal positions',
+          false,
+        ).catch((err: any) => logMessage(`Feetech motion TX error: ${err.message}`, 'error'));
+      } else {
+        sendSerialCommand(formatSerialCommand(pendingJoints, durationMs), false);
+      }
+    };
+
+    const elapsed = performance.now() - lastHardwareCommandAtRef.current;
+    hardwareCommandTimerRef.current = setTimeout(flush, Math.max(0, HARDWARE_COMMAND_INTERVAL_MS - elapsed));
+  }, [connectionType, feetechCalibration, isMotionArmed, logMessage, sendFeetechPacket, sendSerialCommand]);
+
+  const updateDisplayJoints = useCallback((newJoints: JointState) => {
+    jointsRef.current = newJoints;
+    setJoints(newJoints);
+  }, []);
+
+  // Handle joint changes from FK sliders, IK, gamepad, or sequence playback.
+  const handleJointChange = useCallback((newJoints: JointState) => {
+    updateDisplayJoints(newJoints);
+    queueHardwareMotion(newJoints);
+  }, [queueHardwareMotion, updateDisplayJoints]);
+
+  const sendConfiguredSafetyCommand = useCallback((command: string | undefined, action: string) => {
+    if (connectionType === 'simulation') {
+      logMessage(`${action} engaged in simulation.`, 'warn');
+      return;
+    }
+    if (!command) {
+      logMessage(`${action} is software-only. Configure its raw command in .env.local before using hardware.`, 'error');
+      return;
+    }
+    sendSerialCommand(command);
+  }, [connectionType, logMessage, sendSerialCommand]);
+
+  useEffect(() => clearQueuedHardwareMotion, [clearQueuedHardwareMotion]);
 
   // Connect WebSerial (Physical USB)
   const handleConnectWebSerial = async (baudRate: number) => {
@@ -121,15 +327,139 @@ export default function App() {
 
       const writer = port.writable.getWriter();
       portWriterRef.current = writer;
+      serialRxBufferRef.current = new Uint8Array();
+      void startSerialReader(port);
 
       setConnectionType('webserial');
       setConnectionStatus('connected');
-      logMessage(`Connected to WebSerial Port at ${baudRate} baud`, 'info');
+      setVerifiedServoIds([]);
+      setServoPositions({});
+      setIsCalibrationVerified(false);
+      setIsMotionArmed(false);
+      hardwareMotionBlockReasonRef.current = null;
+      logMessage(`WebSerial open at ${baudRate} baud. Select "Verify servos" before attempting motion.`, 'info');
     } catch (err: any) {
       logMessage(`WebSerial Connection Failed: ${err.message}`, 'error');
       throw err;
     }
   };
+
+  const queryFeetechPacket = useCallback(async (servoId: number, packet: Uint8Array) => {
+    const responsePromise = waitForFeetechResponse(servoId);
+    try {
+      await sendFeetechPacket(packet, `Query servo S${servoId}`, false);
+      return await responsePromise;
+    } catch (err) {
+      pendingFeetechResponsesRef.current.delete(servoId);
+      throw err;
+    }
+  }, [sendFeetechPacket, waitForFeetechResponse]);
+
+  // This sends only PING and READ requests; neither command asks a servo to move.
+  const handleVerifyFeetechBus = useCallback(async () => {
+    if (!portWriterRef.current || connectionType !== 'webserial') {
+      logMessage('Open a direct WebSerial connection before verifying the Feetech bus.', 'error');
+      return;
+    }
+
+    setIsMotionArmed(false);
+    setIsCalibrationVerified(false);
+    hardwareMotionBlockReasonRef.current = null;
+    logMessage('Verifying Feetech bus: sending non-motion PING packets to servo IDs 1–6…', 'info');
+
+    const found: number[] = [];
+    const positions: Record<number, number> = {};
+    const calibrationMatches: number[] = [];
+
+    for (const servo of SO_ARM100_SERVOS) {
+      const pingResponse = await queryFeetechPacket(servo.hardwareId, buildPingPacket(servo.hardwareId));
+      if (!pingResponse) continue;
+
+      found.push(servo.hardwareId);
+      const positionResponse = await queryFeetechPacket(
+        servo.hardwareId,
+        buildReadPacket(servo.hardwareId, 56, 2),
+      );
+      if (positionResponse && positionResponse.parameters.length >= 2) {
+        positions[servo.hardwareId] = positionResponse.parameters[0] | (positionResponse.parameters[1] << 8);
+      }
+
+      if (feetechCalibration) {
+        const limitsResponse = await queryFeetechPacket(
+          servo.hardwareId,
+          buildReadPacket(servo.hardwareId, 9, 4),
+        );
+        const offsetResponse = await queryFeetechPacket(
+          servo.hardwareId,
+          buildReadPacket(servo.hardwareId, 31, 2),
+        );
+        const expected = feetechCalibration[servo.id];
+        const limitsMatch = limitsResponse && limitsResponse.parameters.length >= 4
+          && (limitsResponse.parameters[0] | (limitsResponse.parameters[1] << 8)) === expected.minTick
+          && (limitsResponse.parameters[2] | (limitsResponse.parameters[3] << 8)) === expected.maxTick;
+        const offsetMatch = offsetResponse && offsetResponse.parameters.length >= 2
+          && decodeFeetechSignMagnitude(offsetResponse.parameters[0] | (offsetResponse.parameters[1] << 8)) === expected.homingOffset;
+
+        if (limitsMatch && offsetMatch) calibrationMatches.push(servo.hardwareId);
+      }
+    }
+
+    setVerifiedServoIds(found);
+    setServoPositions(positions);
+    const calibrationVerified = Boolean(feetechCalibration) && calibrationMatches.length === SO_ARM100_SERVOS.length;
+    setIsCalibrationVerified(calibrationVerified);
+
+    if (feetechCalibration && found.length === SO_ARM100_SERVOS.length) {
+      const measuredJoints = calibratedTicksToJoints(positions, feetechCalibration);
+      if (measuredJoints) {
+        updateDisplayJoints(measuredJoints);
+        logMessage('3D twin synchronized from the verified servo positions. No motion packet was sent.', 'info');
+      }
+    }
+
+    if (found.length === 0) {
+      logMessage('No Feetech replies received. Check that this is a TTL half-duplex servo adapter, power is on, the bus cable is connected, and the baud rate is 1,000,000.', 'error');
+    } else {
+      const positionSummary = Object.entries(positions).map(([id, position]) => `S${id}=${position}`).join(', ');
+      logMessage(`Verified ${found.length}/6 Feetech servos: ${found.map(id => `S${id}`).join(', ')}.${positionSummary ? ` Present ticks: ${positionSummary}.` : ''}`, found.length === 6 ? 'info' : 'warn');
+    }
+
+    if (feetechCalibration && found.length === SO_ARM100_SERVOS.length) {
+      if (calibrationVerified) {
+        logMessage('Servo calibration registers match the saved follower "white" calibration.', 'info');
+      } else {
+        const mismatched = SO_ARM100_SERVOS
+          .filter(servo => !calibrationMatches.includes(servo.hardwareId))
+          .map(servo => `S${servo.hardwareId}`)
+          .join(', ');
+        logMessage(`Calibration mismatch on ${mismatched}. Motion remains locked; use LeRobot calibration to write the saved values before continuing.`, 'error');
+      }
+    }
+  }, [connectionType, feetechCalibration, logMessage, queryFeetechPacket, updateDisplayJoints]);
+
+  const handleToggleMotionArm = useCallback(() => {
+    if (!feetechCalibration) {
+      logMessage('Direct motion remains locked: VITE_FEETECH_CALIBRATION is missing or invalid.', 'error');
+      return;
+    }
+    if (verifiedServoIds.length !== SO_ARM100_SERVOS.length || !isCalibrationVerified) {
+      logMessage('Direct motion remains locked: all six servos must reply and their stored calibration must match before arming.', 'error');
+      return;
+    }
+
+    if (isMotionArmed) {
+      setIsMotionArmed(false);
+      clearQueuedHardwareMotion();
+      logMessage('Direct calibrated motion disarmed. Queued packets cleared.', 'warn');
+      return;
+    }
+
+    if (window.confirm('Arm calibrated physical motion? Ensure the arm is clear, supported, and its calibration has been verified.')) {
+      hardwareMotionBlockReasonRef.current = null;
+      setIsMotionArmed(true);
+      logMessage('Direct calibrated motion armed. Start with a small, slow joint adjustment.', 'warn');
+    }
+  }, [clearQueuedHardwareMotion, feetechCalibration, isCalibrationVerified, isMotionArmed, logMessage, verifiedServoIds.length]);
 
   // Connect WebSocket (Wireless WiFi)
   const handleConnectWebSocket = (url: string) => {
@@ -160,6 +490,19 @@ export default function App() {
 
   // Disconnect Hardware
   const handleDisconnect = async () => {
+    clearQueuedHardwareMotion();
+    setIsMotionArmed(false);
+    setVerifiedServoIds([]);
+    setServoPositions({});
+    setIsCalibrationVerified(false);
+    pendingFeetechResponsesRef.current.clear();
+    serialReadLoopActiveRef.current = false;
+    if (serialReaderRef.current) {
+      try {
+        await serialReaderRef.current.cancel();
+      } catch {}
+      serialReaderRef.current = null;
+    }
     if (portWriterRef.current) {
       try {
         portWriterRef.current.releaseLock();
@@ -179,6 +522,7 @@ export default function App() {
 
     setConnectionType('simulation');
     setConnectionStatus('connected');
+    hardwareMotionBlockReasonRef.current = null;
     logMessage('Switched to Digital Twin Simulation Mode.', 'info');
   };
 
@@ -205,7 +549,7 @@ export default function App() {
     let currentKfIndex = 0;
 
     const playStep = async () => {
-      while (!isCancelled && isPlaying) {
+      while (!isCancelled) {
         if (currentKfIndex >= currentSequence.keyframes.length) {
           if (currentSequence.loop) {
             currentKfIndex = 0;
@@ -222,31 +566,31 @@ export default function App() {
         logMessage(`Executing Keyframe ${currentKfIndex + 1}: ${kf.name}`, 'info');
 
         // Smooth Interpolation Motion over durationMs
-        const startJoints = { ...joints };
+        const startJoints = { ...jointsRef.current };
         const endJoints = kf.joints;
         const duration = Math.max(100, kf.durationMs / (currentSequence.speedMultiplier || 1.0));
         const startTime = performance.now();
 
         await new Promise<void>(resolve => {
           const animateStep = (now: number) => {
-            if (isCancelled || !isPlaying) return resolve();
+            if (isCancelled) return resolve();
             const elapsed = now - startTime;
             const progress = Math.min(1, elapsed / duration);
 
             const nextJoints = interpolateJoints(startJoints, endJoints, progress);
-            setJoints(nextJoints);
+            handleJointChange(nextJoints);
 
             if (progress < 1) {
               requestAnimationFrame(animateStep);
             } else {
-              setJoints(endJoints);
+              handleJointChange(endJoints);
               resolve();
             }
           };
           requestAnimationFrame(animateStep);
         });
 
-        if (isCancelled || !isPlaying) break;
+        if (isCancelled) break;
 
         // Pause Delay after reaching keyframe
         if (kf.delayAfterMs > 0) {
@@ -262,15 +606,34 @@ export default function App() {
     return () => {
       isCancelled = true;
     };
-  }, [isPlaying, currentSequence]);
+  }, [isPlaying, currentSequence, handleJointChange, logMessage]);
 
   // Emergency Stop (E-Stop)
-  const handleEStop = () => {
+  const handleEStop = useCallback(() => {
+    clearQueuedHardwareMotion();
+    setIsMotionArmed(false);
     setIsPlaying(false);
     setActiveKeyframeIndex(-1);
-    setIsTorqueEnabled(false);
-    logMessage('EMERGENCY STOP ENGAGED! Servo torque disabled.', 'error');
-  };
+    const torqueDisableCommand = import.meta.env.VITE_TORQUE_DISABLE_COMMAND;
+    sendConfiguredSafetyCommand(
+      import.meta.env.VITE_ESTOP_COMMAND || torqueDisableCommand,
+      'EMERGENCY STOP'
+    );
+    if (connectionType === 'simulation' || torqueDisableCommand) {
+      setIsTorqueEnabled(false);
+    }
+  }, [clearQueuedHardwareMotion, connectionType, sendConfiguredSafetyCommand]);
+
+  const handleTorqueToggle = useCallback(() => {
+    const next = !isTorqueEnabled;
+    const command = next ? import.meta.env.VITE_TORQUE_ENABLE_COMMAND : import.meta.env.VITE_TORQUE_DISABLE_COMMAND;
+    if (connectionType !== 'simulation' && !command) {
+      logMessage(`Torque ${next ? 'enable' : 'disable'} is not configured for this hardware controller.`, 'error');
+      return;
+    }
+    setIsTorqueEnabled(next);
+    sendConfiguredSafetyCommand(command, `TORQUE ${next ? 'ENABLE' : 'DISABLE'}`);
+  }, [connectionType, isTorqueEnabled, logMessage, sendConfiguredSafetyCommand]);
 
   // Keyboard Shortcuts Listener
   useEffect(() => {
@@ -290,10 +653,13 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handleEStop]);
 
   // Compute trajectory points for 3D overlay
-  const trajectoryPoints = currentSequence.keyframes.map(kf => forwardKinematics(kf.joints));
+  const trajectoryPoints = useMemo(
+    () => currentSequence.keyframes.map(kf => forwardKinematics(kf.joints)),
+    [currentSequence.keyframes]
+  );
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans antialiased selection:bg-amber-400 selection:text-zinc-950">
@@ -302,8 +668,15 @@ export default function App() {
         connectionType={connectionType}
         connectionStatus={connectionStatus}
         telemetry={telemetry}
+        verifiedServoIds={verifiedServoIds}
+        servoPositions={servoPositions}
+        isMotionArmed={isMotionArmed}
+        hasFeetechCalibration={Boolean(feetechCalibration)}
+        isCalibrationVerified={isCalibrationVerified}
         onConnectWebSerial={handleConnectWebSerial}
         onConnectWebSocket={handleConnectWebSocket}
+        onVerifyFeetechBus={handleVerifyFeetechBus}
+        onToggleMotionArm={handleToggleMotionArm}
         onDisconnect={handleDisconnect}
         onToggleSimulationMode={() => {
           setConnectionType('simulation');
@@ -318,13 +691,14 @@ export default function App() {
         {/* Left Column (3D Digital Twin & Manual Controls) - 7 cols */}
         <div className="lg:col-span-7 flex flex-col gap-6">
           {/* 3D Canvas */}
-          <Arm3DCanvas
-            joints={joints}
-            onJointChange={handleJointChange}
-            showTrajectory={true}
-            trajectoryPoints={trajectoryPoints}
-            activeKeyframeIndex={activeKeyframeIndex}
-          />
+          <Suspense fallback={<LoadingPanel />}>
+            <Arm3DCanvas
+              joints={joints}
+              showTrajectory={true}
+              trajectoryPoints={trajectoryPoints}
+              activeKeyframeIndex={activeKeyframeIndex}
+            />
+          </Suspense>
 
           {/* Control Mode Tab Switcher */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-zinc-900 p-1.5 rounded-sm border border-zinc-800">
@@ -379,29 +753,30 @@ export default function App() {
 
           {/* Tab Content Panels */}
           {controlTab === 'fk' && (
-            <JointControls
-              joints={joints}
-              onChange={handleJointChange}
-              isTorqueEnabled={isTorqueEnabled}
-              onToggleTorque={() => {
-                const next = !isTorqueEnabled;
-                setIsTorqueEnabled(next);
-                logMessage(`Torque ${next ? 'ENABLED' : 'DISABLED'}`, 'info');
-              }}
-              disabled={isPlaying}
-            />
+            <Suspense fallback={<LoadingPanel />}>
+              <JointControls
+                joints={joints}
+                onChange={handleJointChange}
+                isTorqueEnabled={isTorqueEnabled}
+                onToggleTorque={handleTorqueToggle}
+                disabled={isPlaying}
+              />
+            </Suspense>
           )}
 
           {controlTab === 'ik' && (
-            <KinematicsIKPanel
-              joints={joints}
-              onChangeJoints={handleJointChange}
-              disabled={isPlaying}
-            />
+            <Suspense fallback={<LoadingPanel />}>
+              <KinematicsIKPanel
+                joints={joints}
+                onChangeJoints={handleJointChange}
+                disabled={isPlaying}
+              />
+            </Suspense>
           )}
 
           {controlTab === 'leader' && (
-            <LeaderArmPanel
+            <Suspense fallback={<LoadingPanel />}>
+              <LeaderArmPanel
               leaderState={leaderState}
               followerJoints={joints}
               onUpdateLeaderState={(partial) => setLeaderState(prev => ({ ...prev, ...partial }))}
@@ -420,15 +795,18 @@ export default function App() {
                 setCurrentSequence(newSeq);
                 logMessage(`Loaded ${recordedKeyframes.length} Leader teleoperation keyframes into Sequence Studio!`, 'info');
               }}
-            />
+              />
+            </Suspense>
           )}
 
           {controlTab === 'teleop' && (
-            <GamepadVisionOverlay
-              joints={joints}
-              onJointChange={handleJointChange}
-              disabled={isPlaying}
-            />
+            <Suspense fallback={<LoadingPanel />}>
+              <GamepadVisionOverlay
+                joints={joints}
+                onJointChange={handleJointChange}
+                disabled={isPlaying}
+              />
+            </Suspense>
           )}
         </div>
 
@@ -444,7 +822,7 @@ export default function App() {
                 <h3 className="text-xs font-black text-rose-300 uppercase tracking-widest font-mono">
                   EMERGENCY STOP SAFETY
                 </h3>
-                <p className="text-[11px] text-rose-300/80 font-bold">Press 'E' or 'Esc' key to instantly halt all motion.</p>
+                <p className="text-[11px] text-rose-300/80 font-bold">Press 'E' or 'Esc' to halt playback and clear queued motion. Configure a hardware command before physical use.</p>
               </div>
             </div>
 
@@ -457,11 +835,12 @@ export default function App() {
           </div>
 
           {/* Sequence Studio */}
-          <SequenceStudio
+          <Suspense fallback={<LoadingPanel />}>
+            <SequenceStudio
             currentSequence={currentSequence}
             onUpdateSequence={setCurrentSequence}
             currentJoints={joints}
-            onPosePreview={setJoints}
+            onPosePreview={updateDisplayJoints}
             isPlaying={isPlaying}
             activeKeyframeIndex={activeKeyframeIndex}
             onStartPlayback={() => setIsPlaying(true)}
@@ -470,34 +849,43 @@ export default function App() {
               setIsPlaying(false);
               setActiveKeyframeIndex(-1);
               if (currentSequence.keyframes.length > 0) {
-                setJoints(currentSequence.keyframes[0].joints);
+                updateDisplayJoints(currentSequence.keyframes[0].joints);
               }
             }}
             onOpenAiGenerator={() => setIsAiGeneratorOpen(true)}
-          />
+            />
+          </Suspense>
         </div>
       </main>
 
       {/* AI Generator Modal */}
-      <AISequenceGenerator
-        isOpen={isAiGeneratorOpen}
-        onClose={() => setIsAiGeneratorOpen(false)}
-        onApplyGeneratedSequence={(seq) => {
-          setCurrentSequence(seq);
-          if (seq.keyframes.length > 0) {
-            setJoints(seq.keyframes[0].joints);
-          }
-        }}
-      />
+      {isAiGeneratorOpen && (
+        <Suspense fallback={<LoadingPanel />}>
+          <AISequenceGenerator
+            isOpen={isAiGeneratorOpen}
+            onClose={() => setIsAiGeneratorOpen(false)}
+            onApplyGeneratedSequence={(seq) => {
+              setCurrentSequence(seq);
+              if (seq.keyframes.length > 0) {
+                updateDisplayJoints(seq.keyframes[0].joints);
+              }
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Serial Telemetry Console Modal */}
-      <TelemetryLogConsole
-        isOpen={isConsoleOpen}
-        onClose={() => setIsConsoleOpen(false)}
-        telemetry={telemetry}
-        onSendRawCommand={sendSerialCommand}
-        onClearLogs={() => setTelemetry(prev => ({ ...prev, logs: [] }))}
-      />
+      {isConsoleOpen && (
+        <Suspense fallback={<LoadingPanel />}>
+          <TelemetryLogConsole
+            isOpen={isConsoleOpen}
+            onClose={() => setIsConsoleOpen(false)}
+            telemetry={telemetry}
+            onSendRawCommand={sendSerialCommand}
+            onClearLogs={() => setTelemetry(prev => ({ ...prev, logs: [] }))}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

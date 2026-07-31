@@ -62,7 +62,7 @@ export const AISequenceGenerator: React.FC<AISequenceGeneratorProps> = ({
     setGeneratedPreview(null);
 
     try {
-      const response = await fetch('/api/gemini/generate-sequence', {
+      const response = await fetch('/api/ollama/generate-sequence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: textToSubmit })
@@ -90,7 +90,7 @@ export const AISequenceGenerator: React.FC<AISequenceGeneratorProps> = ({
         loop: false,
         speedMultiplier: 1.0,
         createdAt: new Date().toISOString(),
-        tags: ['Gemini AI', 'Auto-Generated']
+        tags: ['Ollama AI', 'Auto-Generated']
       };
 
       setGeneratedPreview(formattedSeq);

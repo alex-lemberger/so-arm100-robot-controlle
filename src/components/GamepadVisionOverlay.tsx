@@ -16,26 +16,50 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   const [gamepadState, setGamepadState] = useState<GamepadMapping | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const jointsRef = useRef(joints);
+  const onJointChangeRef = useRef(onJointChange);
+  const disabledRef = useRef(disabled);
+
+  useEffect(() => {
+    jointsRef.current = joints;
+  }, [joints]);
+
+  useEffect(() => {
+    onJointChangeRef.current = onJointChange;
+  }, [onJointChange]);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
 
   // Poll Gamepad API
   useEffect(() => {
     let animationFrameId: number;
+    let lastControlAt = performance.now();
+    let lastStatusUpdateAt = 0;
 
     const pollGamepad = () => {
+      const now = performance.now();
       if (typeof navigator !== 'undefined' && 'getGamepads' in navigator) {
         const gamepads = navigator.getGamepads();
         const activeGp = Array.from(gamepads).find(g => g !== null);
 
         if (activeGp) {
-          setGamepadState({
-            connected: true,
-            id: activeGp.id,
-            axes: Array.from(activeGp.axes),
-            buttons: activeGp.buttons.map(b => b.pressed)
-          });
+          // Status UI does not need to update at the browser frame rate.
+          if (now - lastStatusUpdateAt >= 100) {
+            lastStatusUpdateAt = now;
+            setGamepadState({
+              connected: true,
+              id: activeGp.id,
+              axes: Array.from(activeGp.axes),
+              buttons: activeGp.buttons.map(b => b.pressed)
+            });
+          }
 
-          // Tele-op joystick control: drive arm based on joystick displacement
-          if (!disabled) {
+          // Tele-op at 30 Hz with time-based speed, independent of render rate.
+          if (!disabledRef.current && now - lastControlAt >= 33) {
+            const elapsedSeconds = Math.min(0.1, (now - lastControlAt) / 1000);
+            lastControlAt = now;
             const axis0 = activeGp.axes[0] || 0; // Left Stick X -> Base
             const axis1 = activeGp.axes[1] || 0; // Left Stick Y -> Shoulder
             const axis2 = activeGp.axes[2] || 0; // Right Stick X -> Wrist Roll
@@ -43,44 +67,52 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
 
             const deadzone = 0.15;
             let updated = false;
-            let nextJoints = { ...joints };
+            const nextJoints = { ...jointsRef.current };
+            const degreesPerSecond = 90;
+            const gripperPercentPerSecond = 120;
 
             if (Math.abs(axis0) > deadzone) {
-              nextJoints.base = Math.max(-180, Math.min(180, nextJoints.base - axis0 * 1.5));
+              nextJoints.base = Math.max(-180, Math.min(180, nextJoints.base - axis0 * degreesPerSecond * elapsedSeconds));
               updated = true;
             }
             if (Math.abs(axis1) > deadzone) {
-              nextJoints.shoulder = Math.max(-90, Math.min(90, nextJoints.shoulder - axis1 * 1.5));
+              nextJoints.shoulder = Math.max(-90, Math.min(90, nextJoints.shoulder - axis1 * degreesPerSecond * elapsedSeconds));
               updated = true;
             }
             if (Math.abs(axis3) > deadzone) {
-              nextJoints.elbow = Math.max(-120, Math.min(120, nextJoints.elbow - axis3 * 1.5));
+              nextJoints.elbow = Math.max(-120, Math.min(120, nextJoints.elbow - axis3 * degreesPerSecond * elapsedSeconds));
+              updated = true;
+            }
+            if (Math.abs(axis2) > deadzone) {
+              nextJoints.wristRoll = Math.max(-180, Math.min(180, nextJoints.wristRoll + axis2 * degreesPerSecond * elapsedSeconds));
               updated = true;
             }
 
             // Triggers for Gripper
             if (activeGp.buttons[6]?.pressed) { // L2 -> Open
-              nextJoints.gripper = Math.min(100, nextJoints.gripper + 3);
+              nextJoints.gripper = Math.min(100, nextJoints.gripper + gripperPercentPerSecond * elapsedSeconds);
               updated = true;
             }
             if (activeGp.buttons[7]?.pressed) { // R2 -> Close
-              nextJoints.gripper = Math.max(0, nextJoints.gripper - 3);
+              nextJoints.gripper = Math.max(0, nextJoints.gripper - gripperPercentPerSecond * elapsedSeconds);
               updated = true;
             }
 
             if (updated) {
-              onJointChange({
+              const roundedJoints = {
                 base: Math.round(nextJoints.base * 10) / 10,
                 shoulder: Math.round(nextJoints.shoulder * 10) / 10,
                 elbow: Math.round(nextJoints.elbow * 10) / 10,
                 wristPitch: nextJoints.wristPitch,
                 wristRoll: Math.round(nextJoints.wristRoll * 10) / 10,
                 gripper: Math.round(nextJoints.gripper)
-              });
+              };
+              jointsRef.current = roundedJoints;
+              onJointChangeRef.current(roundedJoints);
             }
           }
         } else {
-          setGamepadState(null);
+          setGamepadState(previous => previous === null ? previous : null);
         }
       }
       animationFrameId = requestAnimationFrame(pollGamepad);
@@ -91,7 +123,7 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [joints, disabled, onJointChange]);
+  }, []);
 
   // Toggle Camera Feed
   const toggleCamera = async () => {

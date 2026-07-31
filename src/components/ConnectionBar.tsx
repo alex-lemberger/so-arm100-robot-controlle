@@ -6,8 +6,15 @@ interface ConnectionBarProps {
   connectionType: ConnectionType;
   connectionStatus: ConnectionStatus;
   telemetry: TelemetryData;
+  verifiedServoIds: number[];
+  servoPositions: Record<number, number>;
+  isMotionArmed: boolean;
+  hasFeetechCalibration: boolean;
+  isCalibrationVerified: boolean;
   onConnectWebSerial: (baudRate: number) => Promise<void>;
   onConnectWebSocket: (url: string) => void;
+  onVerifyFeetechBus: () => Promise<void>;
+  onToggleMotionArm: () => void;
   onDisconnect: () => void;
   onToggleSimulationMode: () => void;
   onOpenConsole: () => void;
@@ -17,8 +24,15 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
   connectionType,
   connectionStatus,
   telemetry,
+  verifiedServoIds,
+  servoPositions,
+  isMotionArmed,
+  hasFeetechCalibration,
+  isCalibrationVerified,
   onConnectWebSerial,
   onConnectWebSocket,
+  onVerifyFeetechBus,
+  onToggleMotionArm,
   onDisconnect,
   onToggleSimulationMode,
   onOpenConsole
@@ -98,12 +112,43 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
           <Terminal className="w-4 h-4 text-amber-400" />
         </button>
 
-        {connectionStatus === 'connected' ? (
+        {connectionStatus === 'connected' && connectionType !== 'simulation' ? (
           <div className="flex items-center gap-2">
             <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3.5 py-1.5 rounded-sm text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span>{connectionType}_ACTIVE</span>
             </span>
+
+            {connectionType === 'webserial' && (
+              <>
+                <button
+                  onClick={() => void onVerifyFeetechBus()}
+                  className="px-3.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-black uppercase tracking-tight rounded-sm border border-cyan-500/30 transition"
+                  title="Sends non-motion Feetech PING and present-position READ packets to IDs 1–6"
+                >
+                  Verify Servos {verifiedServoIds.length > 0 ? `${verifiedServoIds.length}/6` : ''}
+                </button>
+
+                <button
+                  onClick={onToggleMotionArm}
+                  disabled={!hasFeetechCalibration || !isCalibrationVerified || verifiedServoIds.length !== 6}
+                  className={`px-3.5 py-1.5 text-xs font-black uppercase tracking-tight rounded-sm border transition ${
+                    isMotionArmed
+                      ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border-rose-500/40'
+                      : hasFeetechCalibration && isCalibrationVerified && verifiedServoIds.length === 6
+                        ? 'bg-amber-400 hover:bg-amber-300 text-zinc-950 border-amber-300'
+                        : 'bg-zinc-800 text-zinc-500 border-zinc-700 cursor-not-allowed'
+                  }`}
+                  title={hasFeetechCalibration
+                    ? verifiedServoIds.length === 6
+                      ? isCalibrationVerified ? 'Explicitly arm calibrated physical motion' : 'Stored servo calibration does not yet match the saved calibration'
+                      : 'Verify all six servos first'
+                    : 'Add VITE_FEETECH_CALIBRATION to .env.local first'}
+                >
+                  {isMotionArmed ? 'Disarm Motion' : 'Arm Motion'}
+                </button>
+              </>
+            )}
 
             <button
               onClick={onDisconnect}
@@ -117,11 +162,26 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
             onClick={() => setShowConnectModal(true)}
             className="px-5 py-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-tight rounded-sm shadow-[0_0_15px_rgba(251,191,36,0.3)] transition flex items-center gap-2"
           >
-            {connectionType === 'webserial' ? <Usb className="w-4 h-4" /> : <Wifi className="w-4 h-4" />}
+            <Usb className="w-4 h-4" />
             <span>Connect Hardware...</span>
           </button>
         )}
       </div>
+
+      {connectionType === 'webserial' && connectionStatus === 'connected' && (
+        <div className={`w-full -mt-2 text-[10px] font-mono border px-3 py-2 rounded-sm ${
+          isMotionArmed
+            ? 'bg-amber-400/10 border-amber-400/40 text-amber-200'
+            : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+        }`}>
+          {isMotionArmed
+            ? 'CALIBRATED MOTION ARMED — keep clear and begin with a small joint adjustment.'
+            : verifiedServoIds.length === 6
+              ? `Servo bus verified. ${hasFeetechCalibration ? isCalibrationVerified ? 'Calibration matches; motion is still disarmed.' : 'Calibration does not match the servo registers; motion is locked.' : 'Add calibration before physical motion is available.'}`
+              : 'Direct connection is open. Verify servo responses before physical motion is available.'}
+          {Object.keys(servoPositions).length > 0 && ` Present ticks: ${Object.entries(servoPositions).map(([id, ticks]) => `S${id}=${ticks}`).join(', ')}.`}
+        </div>
+      )}
 
       {/* Wireless & Serial Connection Setup Modal */}
       {showConnectModal && (

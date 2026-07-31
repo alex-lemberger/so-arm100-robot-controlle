@@ -2,5 +2,5 @@
   "name": "SO-ARM100 Robot Controller",
   "description": "Wireless & WebSerial remote control, keyframe sequence programmer, 3D digital twin, and AI trajectory generator for the SO-ARM100 robot arm.",
   "requestFramePermissions": ["camera"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": ["MAJOR_CAPABILITY_LOCAL_OLLAMA_API"]
 }
