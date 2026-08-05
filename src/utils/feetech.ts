@@ -21,6 +21,29 @@ export const FEETECH = {
   },
 } as const;
 
+/**
+ * STS/SMS series registers that can hold negative values use sign-magnitude
+ * encoding, and the sign bit differs per register. Reading a signed register as
+ * a plain unsigned word turns any negative value into a large positive one.
+ *
+ * Mirrors LeRobot's STS_SMS_SERIES_ENCODINGS_TABLE for the sts3215.
+ */
+export const FEETECH_SIGN_BIT = {
+  homingOffset: 11,
+  presentPosition: 15,
+  goalPosition: 15,
+} as const;
+
+export function decodeSignMagnitude(encodedValue: number, signBit: number): number {
+  const magnitude = encodedValue & ((1 << signBit) - 1);
+  return (encodedValue & (1 << signBit)) === 0 ? magnitude : -magnitude;
+}
+
+/** Reads a signed little-endian word out of a Feetech READ reply. */
+export function readSignedWord(parameters: Uint8Array, signBit: number, offset = 0): number {
+  return decodeSignMagnitude(parameters[offset] | (parameters[offset + 1] << 8), signBit);
+}
+
 export interface FeetechPacket {
   id: number;
   instruction: number;

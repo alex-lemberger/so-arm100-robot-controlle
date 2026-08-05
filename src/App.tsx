@@ -7,9 +7,9 @@ import React, { lazy, Suspense, useState, useEffect, useRef, useCallback, useMem
 import { JointState, Sequence, ConnectionType, ConnectionStatus, TelemetryData, LeaderArmState, Keyframe, ServoId } from './types';
 import { DEFAULT_JOINTS, PRESET_SEQUENCES, SO_ARM100_SERVOS } from './constants';
 import { interpolateJoints, formatSerialCommand, forwardKinematics } from './utils/kinematics';
-import { buildPingPacket, buildReadPacket, buildSyncGoalPositionPacket, bytesToHex, FeetechPacket, parseFeetechPackets } from './utils/feetech';
+import { buildPingPacket, buildReadPacket, buildSyncGoalPositionPacket, bytesToHex, FEETECH_SIGN_BIT, FeetechPacket, parseFeetechPackets, readSignedWord } from './utils/feetech';
 import { ConnectionBar } from './components/ConnectionBar';
-import { ShieldAlert, Zap, Cpu, Sparkles, Sliders, Target, Layers, Radio } from 'lucide-react';
+import { ShieldAlert, Zap, Cpu, Sparkles, Sliders, Target, Layers, Radio, Database } from 'lucide-react';
 
 const Arm3DCanvas = lazy(() => import('./components/Arm3DCanvas').then(module => ({ default: module.Arm3DCanvas })));
 const JointControls = lazy(() => import('./components/JointControls').then(module => ({ default: module.JointControls })));
@@ -19,6 +19,7 @@ const GamepadVisionOverlay = lazy(() => import('./components/GamepadVisionOverla
 const LeaderArmPanel = lazy(() => import('./components/LeaderArmPanel').then(module => ({ default: module.LeaderArmPanel })));
 const AISequenceGenerator = lazy(() => import('./components/AISequenceGenerator').then(module => ({ default: module.AISequenceGenerator })));
 const TelemetryLogConsole = lazy(() => import('./components/TelemetryLogConsole').then(module => ({ default: module.TelemetryLogConsole })));
+const DatasetPanel = lazy(() => import('./components/DatasetPanel').then(module => ({ default: module.DatasetPanel })));
 
 const HARDWARE_COMMAND_INTERVAL_MS = 50;
 const FEETECH_REPLY_TIMEOUT_MS = 300;
@@ -75,11 +76,6 @@ function calibratedTicksToJoints(positions: Record<number, number>, calibration:
   return next;
 }
 
-function decodeFeetechSignMagnitude(encodedValue: number, signBit = 11) {
-  const magnitude = encodedValue & ((1 << signBit) - 1);
-  return (encodedValue & (1 << signBit)) === 0 ? magnitude : -magnitude;
-}
-
 const LoadingPanel = () => (
   <div className="min-h-28 rounded-sm border border-zinc-800 bg-zinc-900 animate-pulse" aria-label="Loading panel" />
 );
@@ -99,6 +95,8 @@ export default function App() {
   const [isMotionArmed, setIsMotionArmed] = useState(false);
   const portWriterRef = useRef<any>(null);
   const serialPortRef = useRef<any>(null);
+  const [followerSerialPort, setFollowerSerialPort] = useState<any>(null);
+  const [leaderSerialPort, setLeaderSerialPort] = useState<any>(null);
   const serialReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const serialReadLoopActiveRef = useRef(false);
   const serialRxBufferRef = useRef<Uint8Array>(new Uint8Array());
@@ -140,7 +138,7 @@ export default function App() {
     offsets: { base: 0, shoulder: 0, elbow: 0, wristPitch: 0, wristRoll: 0, gripper: 0 },
     torqueOnLeader: false
   });
-  const [controlTab, setControlTab] = useState<'fk' | 'ik' | 'teleop' | 'leader'>('fk');
+  const [controlTab, setControlTab] = useState<'fk' | 'ik' | 'teleop' | 'leader' | 'dataset'>('fk');
 
   // 6. Modals
   const [isAiGeneratorOpen, setIsAiGeneratorOpen] = useState(false);
@@ -322,8 +320,12 @@ export default function App() {
 
     try {
       const port = await (navigator as any).serial.requestPort();
+      if (port === leaderSerialPort) {
+        throw new Error('This USB serial port is reserved for the leader arm. Disconnect the leader or select the other USB Single Serial device for the follower.');
+      }
       await port.open({ baudRate });
       serialPortRef.current = port;
+      setFollowerSerialPort(port);
 
       const writer = port.writable.getWriter();
       portWriterRef.current = writer;
@@ -381,7 +383,7 @@ export default function App() {
         buildReadPacket(servo.hardwareId, 56, 2),
       );
       if (positionResponse && positionResponse.parameters.length >= 2) {
-        positions[servo.hardwareId] = positionResponse.parameters[0] | (positionResponse.parameters[1] << 8);
+        positions[servo.hardwareId] = readSignedWord(positionResponse.parameters, FEETECH_SIGN_BIT.presentPosition);
       }
 
       if (feetechCalibration) {
@@ -398,7 +400,7 @@ export default function App() {
           && (limitsResponse.parameters[0] | (limitsResponse.parameters[1] << 8)) === expected.minTick
           && (limitsResponse.parameters[2] | (limitsResponse.parameters[3] << 8)) === expected.maxTick;
         const offsetMatch = offsetResponse && offsetResponse.parameters.length >= 2
-          && decodeFeetechSignMagnitude(offsetResponse.parameters[0] | (offsetResponse.parameters[1] << 8)) === expected.homingOffset;
+          && readSignedWord(offsetResponse.parameters, FEETECH_SIGN_BIT.homingOffset) === expected.homingOffset;
 
         if (limitsMatch && offsetMatch) calibrationMatches.push(servo.hardwareId);
       }
@@ -514,6 +516,7 @@ export default function App() {
         await serialPortRef.current.close();
       } catch (e) {}
       serialPortRef.current = null;
+      setFollowerSerialPort(null);
     }
     if (wsClientRef.current) {
       wsClientRef.current.close();
@@ -701,7 +704,7 @@ export default function App() {
           </Suspense>
 
           {/* Control Mode Tab Switcher */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-zinc-900 p-1.5 rounded-sm border border-zinc-800">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-zinc-900 p-1.5 rounded-sm border border-zinc-800">
             <button
               onClick={() => setControlTab('fk')}
               className={`py-2.5 text-xs font-black uppercase tracking-tight rounded-sm transition flex items-center justify-center gap-1.5 ${
@@ -749,19 +752,40 @@ export default function App() {
               <Cpu className="w-4 h-4" />
               <span>Gamepad & Vision</span>
             </button>
+
+            <button
+              onClick={() => setControlTab('dataset')}
+              className={`py-2.5 text-xs font-black uppercase tracking-tight rounded-sm transition flex items-center justify-center gap-1.5 ${
+                controlTab === 'dataset' ? 'bg-amber-400 text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+              }`}
+            >
+              <Database className="w-4 h-4" />
+              <span>Dataset Lab</span>
+            </button>
           </div>
 
           {/* Tab Content Panels */}
           {controlTab === 'fk' && (
-            <Suspense fallback={<LoadingPanel />}>
-              <JointControls
-                joints={joints}
-                onChange={handleJointChange}
-                isTorqueEnabled={isTorqueEnabled}
-                onToggleTorque={handleTorqueToggle}
-                disabled={isPlaying}
-              />
-            </Suspense>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+              <Suspense fallback={<LoadingPanel />}>
+                <JointControls
+                  joints={joints}
+                  onChange={handleJointChange}
+                  isTorqueEnabled={isTorqueEnabled}
+                  onToggleTorque={handleTorqueToggle}
+                  disabled={isPlaying}
+                />
+              </Suspense>
+              <Suspense fallback={<LoadingPanel />}>
+                <GamepadVisionOverlay
+                  joints={joints}
+                  onJointChange={handleJointChange}
+                  disabled={isPlaying}
+                  enableGamepadControl={false}
+                  showGamepadStatus={false}
+                />
+              </Suspense>
+            </div>
           )}
 
           {controlTab === 'ik' && (
@@ -774,7 +798,7 @@ export default function App() {
             </Suspense>
           )}
 
-          {controlTab === 'leader' && (
+          <div className={controlTab === 'leader' ? '' : 'hidden'}>
             <Suspense fallback={<LoadingPanel />}>
               <LeaderArmPanel
               leaderState={leaderState}
@@ -795,9 +819,11 @@ export default function App() {
                 setCurrentSequence(newSeq);
                 logMessage(`Loaded ${recordedKeyframes.length} Leader teleoperation keyframes into Sequence Studio!`, 'info');
               }}
+              followerSerialPort={followerSerialPort}
+              onLeaderSerialPortChange={setLeaderSerialPort}
               />
             </Suspense>
-          )}
+          </div>
 
           {controlTab === 'teleop' && (
             <Suspense fallback={<LoadingPanel />}>
@@ -805,6 +831,18 @@ export default function App() {
                 joints={joints}
                 onJointChange={handleJointChange}
                 disabled={isPlaying}
+              />
+            </Suspense>
+          )}
+
+          {controlTab === 'dataset' && (
+            <Suspense fallback={<LoadingPanel />}>
+              <DatasetPanel
+                onLoadPolicyPreview={(sequence) => {
+                  setCurrentSequence(sequence);
+                  if (sequence.keyframes.length > 0) updateDisplayJoints(sequence.keyframes[0].joints);
+                  logMessage(`Loaded ${sequence.keyframes.length} offline policy preview keyframes. Hardware output remains disabled.`, 'info');
+                }}
               />
             </Suspense>
           )}

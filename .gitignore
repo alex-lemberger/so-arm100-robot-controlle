@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Downloaded datasets and local experiment outputs
+/data/external/
+/data/experiments/
+/outputs/
+/.cache/
+/.venv-lerobot/

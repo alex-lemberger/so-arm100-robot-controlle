@@ -2,20 +2,54 @@ import React, { useEffect, useState, useRef } from 'react';
 import { GamepadMapping, JointState } from '../types';
 import { Gamepad, Camera, Crosshair, AlertCircle } from 'lucide-react';
 
+type CameraRole = 'overview' | 'wrist';
+
+type CameraSelections = Partial<Record<CameraRole, string>>;
+
+const isTrainingCamera = (device: MediaDeviceInfo) => !/(facetime|(?:qbs|obs) virtual camera)/i.test(device.label);
+
+interface CommandedJointSample {
+  tMs: number;
+  joints: JointState;
+}
+
+interface RecordingSession {
+  startedAtIso: string;
+  startedAtPerformanceMs: number;
+  samples: CommandedJointSample[];
+  recorders: Record<CameraRole, MediaRecorder>;
+  chunks: Record<CameraRole, Blob[]>;
+  cameraSettings: Record<CameraRole, MediaTrackSettings>;
+  sampleTimerId: number;
+  elapsedTimerId: number;
+}
+
 interface GamepadVisionOverlayProps {
   joints: JointState;
   onJointChange: (newJoints: JointState) => void;
   disabled?: boolean;
+  enableGamepadControl?: boolean;
+  showGamepadStatus?: boolean;
 }
 
 export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   joints,
   onJointChange,
-  disabled = false
+  disabled = false,
+  enableGamepadControl = true,
+  showGamepadStatus = true
 }) => {
   const [gamepadState, setGamepadState] = useState<GamepadMapping | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraIds, setSelectedCameraIds] = useState<CameraSelections>({});
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isRecordingEpisode, setIsRecordingEpisode] = useState(false);
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const overviewVideoRef = useRef<HTMLVideoElement>(null);
+  const wristVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamsRef = useRef<Partial<Record<CameraRole, MediaStream>>>({});
+  const recordingSessionRef = useRef<RecordingSession | null>(null);
   const jointsRef = useRef(joints);
   const onJointChangeRef = useRef(onJointChange);
   const disabledRef = useRef(disabled);
@@ -29,8 +63,8 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   }, [onJointChange]);
 
   useEffect(() => {
-    disabledRef.current = disabled;
-  }, [disabled]);
+    disabledRef.current = disabled || !enableGamepadControl;
+  }, [disabled, enableGamepadControl]);
 
   // Poll Gamepad API
   useEffect(() => {
@@ -125,27 +159,213 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
     };
   }, []);
 
-  // Toggle Camera Feed
-  const toggleCamera = async () => {
-    if (cameraActive) {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(t => t.stop());
-        videoRef.current.srcObject = null;
+  const releaseCameras = () => {
+    (Object.values(cameraStreamsRef.current) as Array<MediaStream | undefined>)
+      .forEach((stream) => stream?.getTracks().forEach((track) => track.stop()));
+    cameraStreamsRef.current = {};
+    [overviewVideoRef, wristVideoRef].forEach((ref) => {
+      if (ref.current) ref.current.srcObject = null;
+    });
+    setCameraActive(false);
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+
+  const stopEpisodeRecording = async () => {
+    const session = recordingSessionRef.current;
+    if (!session) return;
+
+    recordingSessionRef.current = null;
+    window.clearInterval(session.sampleTimerId);
+    window.clearInterval(session.elapsedTimerId);
+    setIsRecordingEpisode(false);
+    setRecordingElapsedSeconds(0);
+
+    await Promise.all((Object.values(session.recorders) as MediaRecorder[]).map((recorder) => new Promise<void>((resolve) => {
+      if (recorder.state === 'inactive') {
+        resolve();
+        return;
       }
-      setCameraActive(false);
-    } else {
+      recorder.addEventListener('stop', () => resolve(), { once: true });
+      recorder.stop();
+    })));
+
+    const filePrefix = `so-arm100-episode-${session.startedAtIso.replace(/[:.]/g, '-')}`;
+    const videoFiles = (['overview', 'wrist'] as const).map((role) => {
+      const recorder = session.recorders[role];
+      const mimeType = recorder.mimeType || 'video/webm';
+      const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+      const filename = `${filePrefix}-${role}.${extension}`;
+      downloadBlob(new Blob(session.chunks[role], { type: mimeType }), filename);
+      return { role, filename, mimeType };
+    });
+
+    const metadata = {
+      schemaVersion: 1,
+      startedAt: session.startedAtIso,
+      durationMs: Math.round(performance.now() - session.startedAtPerformanceMs),
+      observations: {
+        overview: { file: videoFiles[0], settings: session.cameraSettings.overview },
+        wrist: { file: videoFiles[1], settings: session.cameraSettings.wrist }
+      },
+      actions: {
+        type: 'commanded_joint_target',
+        unit: { base: 'degrees', shoulder: 'degrees', elbow: 'degrees', wristPitch: 'degrees', wristRoll: 'degrees', gripper: 'percent' },
+        sampleRateHz: 20,
+        samples: session.samples
+      },
+      note: 'Joint samples are commanded UI targets, not measured follower-arm position telemetry.'
+    };
+    downloadBlob(new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' }), `${filePrefix}-metadata.json`);
+  };
+
+  const stopCameras = () => {
+    if (recordingSessionRef.current) {
+      void stopEpisodeRecording().finally(releaseCameras);
+      return;
+    }
+    releaseCameras();
+  };
+
+  const discoverCameras = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices.enumerateDevices) {
+      throw new Error('This browser does not support camera capture. Use a current Chrome or Edge browser.');
+    }
+
+    // Camera labels and reliable device IDs are generally only available after permission is granted.
+    const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    permissionStream.getTracks().forEach((track) => track.stop());
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (device) => device.kind === 'videoinput' && isTrainingCamera(device),
+    );
+    setCameraDevices(devices);
+    return devices;
+  };
+
+  const startBothCameras = async () => {
+    stopCameras();
+    setCameraError(null);
+
+    try {
+      const devices = await discoverCameras();
+      if (devices.length < 2) {
+        throw new Error(`Two cameras are required, but the browser can only see ${devices.length}. Check USB connections and Chrome camera permissions.`);
+      }
+
+      const overviewId = devices.some((device) => device.deviceId === selectedCameraIds.overview)
+        ? selectedCameraIds.overview!
+        : devices[0].deviceId;
+      const wristId = devices.some((device) => device.deviceId === selectedCameraIds.wrist && device.deviceId !== overviewId)
+        ? selectedCameraIds.wrist!
+        : devices.find((device) => device.deviceId !== overviewId)?.deviceId;
+
+      if (!wristId) throw new Error('Choose two different camera devices for overview and wrist.');
+
+      const selected = { overview: overviewId, wrist: wristId };
+      setSelectedCameraIds(selected);
+
+      const openCamera = (deviceId: string) => navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: deviceId },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 30 }
+        },
+        audio: false
+      });
+      const overview = await openCamera(overviewId);
+      let wrist: MediaStream;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setCameraActive(true);
-      } catch (err) {
-        alert('Could not access camera feed. Check permissions.');
+        wrist = await openCamera(wristId);
+      } catch (error) {
+        overview.getTracks().forEach((track) => track.stop());
+        throw error;
       }
+      cameraStreamsRef.current = { overview, wrist };
+      if (overviewVideoRef.current) overviewVideoRef.current.srcObject = overview;
+      if (wristVideoRef.current) wristVideoRef.current.srcObject = wrist;
+      setCameraActive(true);
+    } catch (err) {
+      stopCameras();
+      setCameraError(err instanceof Error ? err.message : 'Could not start both camera streams.');
     }
   };
+
+  const updateCameraSelection = (role: CameraRole, deviceId: string) => {
+    setSelectedCameraIds((previous) => ({ ...previous, [role]: deviceId }));
+  };
+
+  const startEpisodeRecording = () => {
+    const overview = cameraStreamsRef.current.overview;
+    const wrist = cameraStreamsRef.current.wrist;
+    if (!overview || !wrist || !cameraActive) {
+      setCameraError('Start both camera feeds before recording an episode.');
+      return;
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      setCameraError('This browser does not support video recording. Use a current Chrome or Edge browser.');
+      return;
+    }
+
+    try {
+      const preferredMimeType = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4']
+        .find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+      const makeRecorder = (stream: MediaStream) => preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
+      const recorders = { overview: makeRecorder(overview), wrist: makeRecorder(wrist) };
+      const chunks: Record<CameraRole, Blob[]> = { overview: [], wrist: [] };
+      (['overview', 'wrist'] as const).forEach((role) => {
+        recorders[role].addEventListener('dataavailable', (event) => {
+          if (event.data.size > 0) chunks[role].push(event.data);
+        });
+      });
+
+      const startedAtPerformanceMs = performance.now();
+      const session: RecordingSession = {
+        startedAtIso: new Date().toISOString(),
+        startedAtPerformanceMs,
+        samples: [{ tMs: 0, joints: { ...jointsRef.current } }],
+        recorders,
+        chunks,
+        cameraSettings: {
+          overview: overview.getVideoTracks()[0]?.getSettings() ?? {},
+          wrist: wrist.getVideoTracks()[0]?.getSettings() ?? {}
+        },
+        sampleTimerId: window.setInterval(() => {
+          const current = recordingSessionRef.current;
+          if (!current) return;
+          current.samples.push({
+            tMs: Math.round(performance.now() - current.startedAtPerformanceMs),
+            joints: { ...jointsRef.current }
+          });
+        }, 50),
+        elapsedTimerId: window.setInterval(() => {
+          const current = recordingSessionRef.current;
+          if (current) setRecordingElapsedSeconds(Math.floor((performance.now() - current.startedAtPerformanceMs) / 1_000));
+        }, 250)
+      };
+
+      recordingSessionRef.current = session;
+      recorders.overview.start(1_000);
+      recorders.wrist.start(1_000);
+      setCameraError(null);
+      setIsRecordingEpisode(true);
+    } catch (error) {
+      setCameraError(error instanceof Error ? error.message : 'Could not start the episode recorder.');
+    }
+  };
+
+  useEffect(() => () => stopCameras(), []);
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-sm p-6 shadow-2xl flex flex-col gap-4">
@@ -155,11 +375,13 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
           <span className="text-[10px] uppercase tracking-[0.3em] text-zinc-500 font-bold block mb-0.5">
             Wireless Tele-Op & Vision
           </span>
-          <h2 className="text-2xl font-black uppercase italic text-white tracking-tight">Joystick & Camera Stream</h2>
+          <h2 className="text-2xl font-black uppercase italic text-white tracking-tight">
+            {showGamepadStatus ? 'Joystick & Dual-Camera Stream' : 'Dual-Camera Stream'}
+          </h2>
         </div>
 
         <button
-          onClick={toggleCamera}
+          onClick={cameraActive ? stopCameras : startBothCameras}
           className={`px-3.5 py-1.5 rounded-sm text-xs font-black uppercase tracking-tight flex items-center gap-1.5 transition ${
             cameraActive
               ? 'bg-rose-500/10 text-rose-400 border border-rose-500/40'
@@ -167,22 +389,26 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
           }`}
         >
           <Camera className="w-3.5 h-3.5" />
-          <span>{cameraActive ? 'Stop Webcam Feed' : 'Launch Vision Overlay'}</span>
+          <span>{cameraActive ? 'Stop Both Cameras' : 'Start Both Cameras'}</span>
         </button>
       </div>
 
       {/* Main Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={showGamepadStatus ? 'grid grid-cols-1 lg:grid-cols-[minmax(13rem,0.55fr)_minmax(0,1fr)] gap-4 items-start' : ''}>
         {/* Gamepad Status */}
-        <div className="bg-zinc-950 p-4 rounded-sm border border-zinc-800 flex flex-col gap-3">
+        {showGamepadStatus && <div className="bg-zinc-950 p-4 rounded-sm border border-zinc-800 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-tight text-zinc-200 flex items-center gap-1.5">
               <Gamepad className="w-4 h-4 text-amber-400" />
               Joystick Controller Mapping
             </span>
             {gamepadState?.connected ? (
-              <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-sm font-mono font-bold uppercase">
-                ACTIVE
+              <span className={`text-[10px] px-2 py-0.5 rounded-sm font-mono font-bold uppercase border ${
+                enableGamepadControl && !disabled
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+              }`}>
+                {enableGamepadControl && !disabled ? 'ACTIVE' : 'MONITOR ONLY'}
               </span>
             ) : (
               <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-sm font-mono font-bold uppercase">
@@ -206,35 +432,84 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
               Plug in an Xbox, PlayStation, or USB Gamepad controller to tele-operate the SO-ARM100 joints live using analog thumbsticks!
             </p>
           )}
-        </div>
+        </div>}
 
-        {/* Vision Feed Screen */}
-        <div className="relative bg-zinc-950 h-36 rounded-sm border border-zinc-800 overflow-hidden flex items-center justify-center">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full h-full object-cover ${cameraActive ? 'block' : 'hidden'}`}
-          />
-
-          {!cameraActive ? (
-            <div className="flex flex-col items-center gap-2 text-zinc-500 text-xs font-bold uppercase tracking-tight">
-              <Crosshair className="w-6 h-6 text-zinc-600" />
-              <span>Camera Stream Inactive</span>
-            </div>
-          ) : (
-            /* Vision Target Overlay Reticle */
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="w-20 h-20 border-2 border-dashed border-amber-400 rounded-sm flex items-center justify-center animate-pulse">
-                <Crosshair className="w-6 h-6 text-amber-400" />
+        <div className="flex flex-col gap-4">
+          {(['overview', 'wrist'] as const).map((role) => {
+          const videoRef = role === 'overview' ? overviewVideoRef : wristVideoRef;
+          const otherRole = role === 'overview' ? 'wrist' : 'overview';
+          const roleLabel = role === 'overview' ? 'Overview Camera' : 'Wrist Camera';
+          return (
+            <div key={role} className="bg-zinc-950 rounded-sm border border-zinc-800 overflow-hidden">
+              <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-3 py-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">{roleLabel}</span>
+                <select
+                  value={selectedCameraIds[role] ?? ''}
+                  onChange={(event) => updateCameraSelection(role, event.target.value)}
+                  disabled={cameraActive || cameraDevices.length === 0}
+                  className="max-w-44 bg-zinc-900 border border-zinc-700 rounded-sm px-2 py-1 text-[10px] text-zinc-200 disabled:opacity-50"
+                  aria-label={`Select ${roleLabel.toLowerCase()}`}
+                >
+                  {cameraDevices.length === 0 && <option value="">Detected after permission</option>}
+                  {cameraDevices.map((device, deviceIndex) => (
+                    <option
+                      key={device.deviceId}
+                      value={device.deviceId}
+                      disabled={device.deviceId === selectedCameraIds[otherRole]}
+                    >
+                      {device.label || `Camera ${deviceIndex + 1}`}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="absolute top-2 left-2 bg-zinc-900/90 px-2.5 py-0.5 rounded-sm text-[10px] font-mono text-amber-400 border border-zinc-700 font-bold uppercase">
-                VISION RETICLE ACTIVE
+              <div className="relative h-64 sm:h-72 flex items-center justify-center">
+                <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${cameraActive ? 'block' : 'hidden'}`} />
+                {!cameraActive ? (
+                  <div className="flex flex-col items-center gap-2 text-zinc-500 text-xs font-bold uppercase tracking-tight">
+                    <Crosshair className="w-6 h-6 text-zinc-600" />
+                    <span>{role.toUpperCase()} INACTIVE</span>
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <div className="w-16 h-16 border-2 border-dashed border-amber-400 rounded-sm flex items-center justify-center animate-pulse">
+                      <Crosshair className="w-5 h-5 text-amber-400" />
+                    </div>
+                    <div className="absolute top-2 left-2 bg-zinc-900/90 px-2 py-0.5 rounded-sm text-[10px] font-mono text-amber-400 border border-zinc-700 font-bold uppercase">
+                      {role.toUpperCase()} LIVE
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-          )}
+          );
+          })}
         </div>
+      </div>
+      {cameraError && (
+        <div className="flex items-start gap-2 rounded-sm border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+          <span>{cameraError}</span>
+        </div>
+      )}
+      <div className="flex flex-col gap-3 rounded-sm border border-zinc-800 bg-zinc-950 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black uppercase tracking-wider text-zinc-100">Demonstration Recorder</span>
+            {isRecordingEpisode && <span className="bg-rose-500/15 px-2 py-0.5 text-[10px] font-mono font-bold text-rose-300">REC {recordingElapsedSeconds}s</span>}
+          </div>
+          <p className="mt-1 text-[11px] text-zinc-400">Records both videos and commanded joint targets at 20 Hz. It does not move the robot.</p>
+        </div>
+        <button
+          onClick={isRecordingEpisode ? () => void stopEpisodeRecording() : startEpisodeRecording}
+          disabled={!isRecordingEpisode && !cameraActive}
+          className={`px-4 py-2 text-xs font-black uppercase tracking-tight transition disabled:cursor-not-allowed disabled:opacity-50 ${
+            isRecordingEpisode
+              ? 'border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+              : 'border border-amber-400/40 bg-amber-400 text-zinc-950 hover:bg-amber-300'
+          }`}
+        >
+          {isRecordingEpisode ? 'Stop & Download Episode' : 'Record Episode'}
+        </button>
       </div>
     </div>
   );

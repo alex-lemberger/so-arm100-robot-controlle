@@ -190,7 +190,7 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
             <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900">
               <div className="flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-amber-400" />
-                <h3 className="text-sm font-black uppercase italic text-zinc-100">Connect Hardware</h3>
+                <h3 className="text-sm font-black uppercase italic text-zinc-100">Follower USB Setup</h3>
               </div>
               <button
                 onClick={() => setShowConnectModal(false)}
@@ -213,7 +213,7 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 font-bold text-zinc-200 uppercase tracking-tight">
                     <Usb className="w-4 h-4 text-cyan-400" />
-                    <span>Option A: Direct USB WebSerial</span>
+                    <span>Follower: Direct USB WebSerial</span>
                   </div>
                   {isWebSerialAvailable ? (
                     <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-sm border border-emerald-500/20 font-mono font-bold">
@@ -226,7 +226,7 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
                   )}
                 </div>
                 <p className="text-zinc-400 text-[11px]">
-                  Direct serial connection to Waveshare / Feetech STS3215 bus servo controller board.
+                  Select the follower arm's USB adapter only. After connecting, **Verify Servos** must match the saved follower `white` calibration before motion can be armed.
                 </p>
 
                 <div className="flex items-center gap-2">
@@ -246,7 +246,7 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
                   onClick={handleSerialConnectClick}
                   className="w-full py-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black uppercase tracking-tight rounded-sm transition"
                 >
-                  Select USB Serial Port & Connect
+                  Select Follower USB Port & Connect
                 </button>
               </div>
 

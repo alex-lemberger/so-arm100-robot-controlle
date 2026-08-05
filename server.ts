@@ -105,6 +105,7 @@ async function startServer() {
 
   const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
   const model = process.env.OLLAMA_MODEL || "ornith:9b";
+  const datasetRoot = path.join(process.cwd(), "data", "external", "svla_so100_pickplace");
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
@@ -114,6 +115,59 @@ async function startServer() {
       ollamaUrl: ollamaBaseUrl,
       model
     });
+  });
+
+  // Local, read-only LeRobot dataset inspection. Dataset playback never enters
+  // the hardware command path; it is only exposed for synchronized visual review.
+  app.get("/api/dataset/svla-so100", async (req, res) => {
+    try {
+      const infoPath = path.join(datasetRoot, "meta", "info.json");
+      const info = JSON.parse(await (await import("node:fs/promises")).readFile(infoPath, "utf8"));
+      res.json({
+        id: "lerobot/svla_so100_pickplace",
+        robotType: info.robot_type,
+        episodes: info.total_episodes,
+        frames: info.total_frames,
+        fps: info.fps,
+        cameras: ["top", "wrist"],
+        actionJoints: info.features?.action?.names ?? [],
+        stateJoints: info.features?.["observation.state"]?.names ?? [],
+        videos: {
+          top: "/api/dataset/svla-so100/video/top",
+          wrist: "/api/dataset/svla-so100/video/wrist"
+        }
+      });
+    } catch {
+      res.status(404).json({ error: "The local svla_so100_pickplace dataset is not installed." });
+    }
+  });
+
+  app.get("/api/dataset/svla-so100/video/:camera", (req, res) => {
+    const camera = req.params.camera;
+    if (camera !== "top" && camera !== "wrist") {
+      return res.status(400).json({ error: "Camera must be top or wrist." });
+    }
+    const videoPath = path.join(
+      datasetRoot,
+      "videos",
+      `observation.images.${camera}`,
+      "chunk-000",
+      "file-000.mp4"
+    );
+    return res.sendFile(videoPath, (error) => {
+      const statusCode = (error as (Error & { statusCode?: number }) | null)?.statusCode || 404;
+      if (error && !res.headersSent) res.status(statusCode).json({ error: "Dataset video not found." });
+    });
+  });
+
+  app.get("/api/policy/preview", async (req, res) => {
+    try {
+      const previewPath = path.join(process.cwd(), "outputs", "policy-preview.json");
+      const preview = JSON.parse(await (await import("node:fs/promises")).readFile(previewPath, "utf8"));
+      res.json(preview);
+    } catch {
+      res.status(404).json({ error: "Generate the offline policy preview first." });
+    }
   });
 
   // AI Sequence Trajectory Generation Endpoint
