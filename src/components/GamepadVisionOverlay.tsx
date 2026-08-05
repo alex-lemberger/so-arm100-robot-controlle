@@ -235,7 +235,22 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       videoBlobs.forEach(({ role, extension, blob }) => {
         downloadBlob(blob, `${filePrefix}-${role}.${extension}`);
       });
-      downloadBlob(new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' }), `${filePrefix}-metadata.json`);
+      // The metadata's observations.<role>.file fields point at the
+      // server-side filenames (e.g. "overview.webm"), which don't match the
+      // prefixed filenames actually written to the Downloads folder above.
+      // Rebuild those two fields so the downloaded metadata.json is
+      // internally consistent with what's really on disk.
+      const downloadFilenames = Object.fromEntries(
+        videoBlobs.map(({ role, extension }) => [role, `${filePrefix}-${role}.${extension}`])
+      ) as Record<CameraRole, string>;
+      const fallbackMetadata = {
+        ...metadata,
+        observations: {
+          overview: { ...metadata.observations.overview, file: downloadFilenames.overview },
+          wrist: { ...metadata.observations.wrist, file: downloadFilenames.wrist }
+        }
+      };
+      downloadBlob(new Blob([JSON.stringify(fallbackMetadata, null, 2)], { type: 'application/json' }), `${filePrefix}-metadata.json`);
       setSaveStatus('error');
       setSaveMessage(`Could not save to the server (${reason}). Downloaded to your browser's Downloads folder instead.`);
     };
@@ -264,7 +279,21 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
 
   const stopCameras = () => {
     if (recordingSessionRef.current) {
-      void stopEpisodeRecording().finally(releaseCameras);
+      // Capture and release the *current* streams synchronously, rather than
+      // deferring the lookup into the `.finally()` below — saving an episode
+      // to the server can take seconds, and if the user starts new camera
+      // streams while the save is still pending, a deferred `releaseCameras`
+      // would read `cameraStreamsRef.current` at that later time and tear
+      // down the freshly-started streams instead of the ones being saved.
+      const streams = Object.values(cameraStreamsRef.current) as Array<MediaStream | undefined>;
+      cameraStreamsRef.current = {};
+      setCameraActive(false);
+      [overviewVideoRef, wristVideoRef].forEach((ref) => {
+        if (ref.current) ref.current.srcObject = null;
+      });
+      void stopEpisodeRecording().finally(() =>
+        streams.forEach((stream) => stream?.getTracks().forEach((track) => track.stop()))
+      );
       return;
     }
     releaseCameras();

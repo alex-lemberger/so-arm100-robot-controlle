@@ -39,7 +39,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 // multer's field-ordering requirement for disk-storage destination callbacks.
 const episodeUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 512 * 1024 * 1024 } // 512MB/file cap — generous safety net for short local clips
+  limits: { fileSize: 512 * 1024 * 1024, fieldSize: 32 * 1024 * 1024 } // 512MB/file cap — generous safety net for short local clips
 });
 
 function normalizeSequenceShape(value: unknown): unknown {
