@@ -3,6 +3,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { jsonrepair } from "jsonrepair";
+import multer from "multer";
 
 type JointState = {
   base: number;
@@ -32,6 +33,14 @@ const jointLimits: Record<keyof JointState, readonly [number, number]> = {
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+// Episode video uploads are buffered in memory, then written to disk in the
+// /api/episodes handler once the request is fully parsed — this sidesteps
+// multer's field-ordering requirement for disk-storage destination callbacks.
+const episodeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 512 * 1024 * 1024 } // 512MB/file cap — generous safety net for short local clips
+});
 
 function normalizeSequenceShape(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -169,6 +178,69 @@ async function startServer() {
       res.status(404).json({ error: "Generate the offline policy preview first." });
     }
   });
+
+  // Save a locally recorded teleoperation episode (two camera videos + a
+  // commanded-joint-samples metadata.json) to disk. The client falls back to
+  // browser downloads if this fails, so this stays simple: no transactional
+  // rollback on a partial write failure.
+  app.post(
+    "/api/episodes",
+    episodeUpload.fields([
+      { name: "overview", maxCount: 1 },
+      { name: "wrist", maxCount: 1 }
+    ]),
+    async (req, res) => {
+      try {
+        const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+        const overviewFile = files?.overview?.[0];
+        const wristFile = files?.wrist?.[0];
+        if (!overviewFile || !wristFile) {
+          return res.status(400).json({ error: "Both overview and wrist video files are required." });
+        }
+
+        let metadata: Record<string, unknown>;
+        try {
+          metadata = JSON.parse(String(req.body.metadata));
+        } catch {
+          return res.status(400).json({ error: "metadata field must be valid JSON." });
+        }
+        if (
+          typeof metadata.startedAt !== "string"
+          || typeof metadata.schemaVersion !== "number"
+          || !metadata.observations
+          || !metadata.actions
+        ) {
+          return res.status(400).json({ error: "metadata is missing required fields (startedAt, schemaVersion, observations, actions)." });
+        }
+
+        const sanitized = (metadata.startedAt as string).replace(/[^a-zA-Z0-9-]/g, "-");
+        const episodeName = sanitized.length > 0 ? sanitized : `episode-${Date.now()}`;
+        const episodeDirRelative = path.join("data", "local", "episodes", episodeName);
+        const episodeDirAbsolute = path.join(process.cwd(), episodeDirRelative);
+
+        const fs = await import("node:fs/promises");
+        await fs.mkdir(episodeDirAbsolute, { recursive: true });
+
+        const writeEpisodeFile = async (label: string, filename: string, data: Buffer | string) => {
+          try {
+            await fs.writeFile(path.join(episodeDirAbsolute, filename), data);
+          } catch (writeError) {
+            throw new Error(`Failed to write ${label}: ${(writeError as Error).message}`);
+          }
+        };
+
+        const extensionFor = (mimetype: string) => (mimetype.includes("mp4") ? "mp4" : "webm");
+        await writeEpisodeFile("overview video", `overview.${extensionFor(overviewFile.mimetype)}`, overviewFile.buffer);
+        await writeEpisodeFile("wrist video", `wrist.${extensionFor(wristFile.mimetype)}`, wristFile.buffer);
+        await writeEpisodeFile("metadata.json", "metadata.json", JSON.stringify(metadata, null, 2));
+
+        res.status(201).json({ episodeDir: episodeDirRelative });
+      } catch (err: any) {
+        console.error("Episode save error:", err);
+        res.status(500).json({ error: err.message || "Failed to save episode to disk." });
+      }
+    }
+  );
 
   // AI Sequence Trajectory Generation Endpoint
   app.post("/api/ollama/generate-sequence", async (req, res) => {
