@@ -25,6 +25,16 @@ LEROBOT_JOINT_NAMES = [JOINT_NAME_MAP[joint] for joint in JOINT_ORDER]
 
 TASK_STRING = "Pick up a shape piece and insert it into its matching hole on the puzzle board."
 
+DATASET_FPS = 30
+
+# LeRobot derives every frame's timeline position as frame_index / fps, so a
+# recording whose actual camera frame rate doesn't match DATASET_FPS would
+# silently time-warp the whole episode with no error. Real measured worst-case
+# overview<->wrist pairing delta across all 29 recorded episodes is 0.034s
+# (about one frame period at 30fps), so this tolerance has zero false-positive
+# risk on real data while still catching a stalled/truncated camera stream.
+MAX_FRAME_PAIRING_GAP_S = 0.1
+
 FEATURES = {
     "action": {"dtype": "float32", "shape": (6,), "names": LEROBOT_JOINT_NAMES},
     "observation.state": {"dtype": "float32", "shape": (6,), "names": LEROBOT_JOINT_NAMES},
@@ -59,8 +69,21 @@ def decode_video_frames(path: Path) -> list[tuple[float, np.ndarray]]:
     return frames
 
 
-def nearest_frame(frames: list[tuple[float, np.ndarray]], t_sec: float) -> np.ndarray:
-    return min(frames, key=lambda item: abs(item[0] - t_sec))[1]
+def nearest_frame(
+    frames: list[tuple[float, np.ndarray]],
+    t_sec: float,
+    max_gap_s: float = MAX_FRAME_PAIRING_GAP_S,
+) -> np.ndarray:
+    best_t, best_frame = min(frames, key=lambda item: abs(item[0] - t_sec))
+    gap = abs(best_t - t_sec)
+    if gap > max_gap_s:
+        raise ValueError(
+            f"No frame within {max_gap_s}s of target timestamp {t_sec:.3f}s "
+            f"(nearest available was {best_t:.3f}s, gap={gap:.3f}s). This usually "
+            "means a camera stream stalled or was truncated partway through the "
+            "recording."
+        )
+    return best_frame
 
 
 def joints_at(samples: list[dict], t_ms: float) -> dict:
@@ -92,6 +115,14 @@ def validate_episode_dir(episode_dir: Path, name: str) -> None:
     for role in ("overview", "wrist"):
         if role not in metadata["observations"]:
             raise ValueError(f"metadata.json for {name} is missing observations.{role}")
+        actual_fps = metadata["observations"][role].get("settings", {}).get("frameRate")
+        if actual_fps != DATASET_FPS:
+            raise ValueError(
+                f"Episode {name}: observations.{role}.settings.frameRate is "
+                f"{actual_fps!r}, but the dataset is being built at fps={DATASET_FPS}. "
+                "LeRobot derives frame timestamps as frame_index/fps, so a mismatch "
+                "here would silently time-warp this episode's timeline."
+            )
 
 
 def convert_episode(dataset: LeRobotDataset, episode_dir: Path, name: str) -> int:
@@ -132,7 +163,7 @@ def build_dataset(manifest_path: Path, episodes_root: Path, output_root: Path, r
 
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
-        fps=30,
+        fps=DATASET_FPS,
         features=FEATURES,
         root=output_root,
         robot_type="so100",

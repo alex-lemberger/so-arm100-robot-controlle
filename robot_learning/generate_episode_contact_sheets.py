@@ -86,9 +86,19 @@ def main() -> None:
         print(f"Wrote {out_path}")
 
     manifest_path = OUTPUT_DIR / "curated-episodes.txt"
-    write_manifest(episode_names, manifest_path)
-    print(f"Wrote manifest listing {len(episode_names)} episodes to {manifest_path}")
-    print("Review the contact sheets, then edit the manifest to remove any episodes to exclude.")
+    if manifest_path.exists():
+        fallback_path = OUTPUT_DIR / "curated-episodes.txt.new"
+        write_manifest(episode_names, fallback_path)
+        print(f"{manifest_path} already exists and may contain hand-curated edits — not overwriting it.")
+        print(
+            f"Wrote the current full episode list to {fallback_path} instead. "
+            f"Diff it against {manifest_path} and manually merge in any newly-discovered "
+            "episodes you want to include."
+        )
+    else:
+        write_manifest(episode_names, manifest_path)
+        print(f"Wrote manifest listing {len(episode_names)} episodes to {manifest_path}")
+        print("Review the contact sheets, then edit the manifest to remove any episodes to exclude.")
 
 
 if __name__ == "__main__":
