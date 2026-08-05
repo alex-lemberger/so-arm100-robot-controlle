@@ -46,6 +46,8 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isRecordingEpisode, setIsRecordingEpisode] = useState(false);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const overviewVideoRef = useRef<HTMLVideoElement>(null);
   const wristVideoRef = useRef<HTMLVideoElement>(null);
   const cameraStreamsRef = useRef<Partial<Record<CameraRole, MediaStream>>>({});
@@ -189,6 +191,8 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
     window.clearInterval(session.elapsedTimerId);
     setIsRecordingEpisode(false);
     setRecordingElapsedSeconds(0);
+    setSaveStatus('saving');
+    setSaveMessage('Saving episode to the server…');
 
     await Promise.all((Object.values(session.recorders) as MediaRecorder[]).map((recorder) => new Promise<void>((resolve) => {
       if (recorder.state === 'inactive') {
@@ -200,13 +204,11 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
     })));
 
     const filePrefix = `so-arm100-episode-${session.startedAtIso.replace(/[:.]/g, '-')}`;
-    const videoFiles = (['overview', 'wrist'] as const).map((role) => {
+    const videoBlobs = (['overview', 'wrist'] as const).map((role) => {
       const recorder = session.recorders[role];
       const mimeType = recorder.mimeType || 'video/webm';
       const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
-      const filename = `${filePrefix}-${role}.${extension}`;
-      downloadBlob(new Blob(session.chunks[role], { type: mimeType }), filename);
-      return { role, filename, mimeType };
+      return { role, mimeType, extension, blob: new Blob(session.chunks[role], { type: mimeType }) };
     });
 
     const metadata = {
@@ -214,8 +216,8 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       startedAt: session.startedAtIso,
       durationMs: Math.round(performance.now() - session.startedAtPerformanceMs),
       observations: {
-        overview: { file: videoFiles[0], settings: session.cameraSettings.overview },
-        wrist: { file: videoFiles[1], settings: session.cameraSettings.wrist }
+        overview: { file: `overview.${videoBlobs[0].extension}`, settings: session.cameraSettings.overview },
+        wrist: { file: `wrist.${videoBlobs[1].extension}`, settings: session.cameraSettings.wrist }
       },
       actions: {
         type: 'commanded_joint_target',
@@ -225,7 +227,39 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       },
       note: 'Joint samples are commanded UI targets, not measured follower-arm position telemetry.'
     };
-    downloadBlob(new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' }), `${filePrefix}-metadata.json`);
+
+    // Browser download is the fallback path now, not the primary one — used
+    // only if the server save fails, so a recorded demonstration is never
+    // silently lost.
+    const fallbackToDownload = (reason: string) => {
+      videoBlobs.forEach(({ role, extension, blob }) => {
+        downloadBlob(blob, `${filePrefix}-${role}.${extension}`);
+      });
+      downloadBlob(new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' }), `${filePrefix}-metadata.json`);
+      setSaveStatus('error');
+      setSaveMessage(`Could not save to the server (${reason}). Downloaded to your browser's Downloads folder instead.`);
+    };
+
+    try {
+      const formData = new FormData();
+      // Do not set a Content-Type header manually — fetch derives the
+      // multipart boundary from the FormData instance itself.
+      formData.append('metadata', JSON.stringify(metadata));
+      videoBlobs.forEach(({ role, extension, blob }) => {
+        formData.append(role, blob, `${role}.${extension}`);
+      });
+
+      const response = await fetch('/api/episodes', { method: 'POST', body: formData });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      const result = await response.json() as { episodeDir: string };
+      setSaveStatus('saved');
+      setSaveMessage(`Episode saved to ${result.episodeDir}`);
+    } catch (error) {
+      fallbackToDownload(error instanceof Error ? error.message : 'unknown error');
+    }
   };
 
   const stopCameras = () => {
@@ -305,6 +339,8 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   };
 
   const startEpisodeRecording = () => {
+    setSaveStatus('idle');
+    setSaveMessage(null);
     const overview = cameraStreamsRef.current.overview;
     const wrist = cameraStreamsRef.current.wrist;
     if (!overview || !wrist || !cameraActive) {
@@ -491,6 +527,18 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
           <span>{cameraError}</span>
         </div>
       )}
+      {saveStatus !== 'idle' && saveMessage && (
+        <div className={`flex items-start gap-2 rounded-sm border px-3 py-2 text-xs ${
+          saveStatus === 'error'
+            ? 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+            : saveStatus === 'saving'
+            ? 'border-zinc-700 bg-zinc-900 text-zinc-300'
+            : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+        }`}>
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{saveMessage}</span>
+        </div>
+      )}
       <div className="flex flex-col gap-3 rounded-sm border border-zinc-800 bg-zinc-950 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -508,7 +556,7 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
               : 'border border-amber-400/40 bg-amber-400 text-zinc-950 hover:bg-amber-300'
           }`}
         >
-          {isRecordingEpisode ? 'Stop & Download Episode' : 'Record Episode'}
+          {isRecordingEpisode ? 'Stop & Save Episode' : 'Record Episode'}
         </button>
       </div>
     </div>
