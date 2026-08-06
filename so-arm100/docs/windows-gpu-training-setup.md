@@ -60,15 +60,21 @@ between the two machines.
    Expected: `True RTX 5070`. If `False`, stop and fix the torch/CUDA
    install before proceeding — don't discover this after a long download.
 
-5. **Install lerobot pinned to 0.6.1 with the smolvla extra:**
+5. **Install lerobot pinned to 0.6.1 with the smolvla and dataset extras:**
 
    ```powershell
    pip install lerobot==0.6.1
    pip install "lerobot[smolvla]"
+   pip install "lerobot[dataset]"
    pip install transformers==5.5.4
    ```
 
-6. **Transfer the dataset.** `data/local/lerobot_dataset/` is gitignored
+   The `dataset` extra (`datasets`, `pyarrow`, `av`, etc.) is required by `lerobot-train` even
+   for local datasets — without it the train script fails at import with a missing-package error.
+   `transformers==5.5.4` is pulled in by the `smolvla` extra automatically; the explicit pin is
+   kept here as a guard.
+
+6. **Transfer the dataset and strip macOS metadata files.** `data/local/lerobot_dataset/` is gitignored
    (never pushed) and is 561 MB — copy it over via USB stick, network
    share, or a cloud drive, whichever's easiest. Put it anywhere on the
    Windows box; `--dataset.root` in the training command points at it
@@ -76,6 +82,17 @@ between the two machines.
    copy the source `data/local/episodes/` only if you want it for
    reference — it's not needed for training itself (only the already-built
    `lerobot_dataset/` is).
+
+   After copying, delete macOS AppleDouble metadata files (`._*`) that
+   macOS silently creates alongside every file. They're invisible on Mac
+   but land on Windows and cause the `datasets` library to crash with
+   "Parquet magic bytes not found":
+
+   ```powershell
+   Get-ChildItem -Recurse -Force data/local/lerobot_dataset `
+     | Where-Object { $_.Name -like "._*" } `
+     | Remove-Item -Force -Confirm:$false
+   ```
 
 7. **Disable sleep for the duration of the run.** The Mac's earlier
    2000-step run took ~5 hours instead of a predicted ~1 hour because the

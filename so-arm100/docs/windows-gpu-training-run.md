@@ -31,7 +31,8 @@ short run first to catch problems before committing hours to it:
   --policy.path=lerobot/smolvla_base `
   --policy.push_to_hub=false `
   --policy.device=cuda `
-  --policy.use_amp=true `
+  --policy.use_amp=false `
+  --policy.input_features=null `
   --output_dir=outputs/train/smolvla_shape_sort_smoke_cuda `
   --job_name=smolvla_shape_sort_smoke_cuda `
   --wandb.enable=false `
@@ -39,6 +40,19 @@ short run first to catch problems before committing hours to it:
   --save_freq=10 `
   --log_freq=1
 ```
+
+Two flags differ from the Mac command:
+
+- `--policy.use_amp=false` — SmolVLA uses BFloat16 weights; PyTorch's
+  AMP GradScaler doesn't support BFloat16 and throws
+  `NotImplementedError` on the first backward pass. BFloat16 is native
+  precision on Blackwell and doesn't need gradient scaling, so AMP can
+  simply be disabled.
+- `--policy.input_features=null` — `lerobot/smolvla_base` ships with a
+  3-camera input config (`camera1/2/3`); this dataset has 2 cameras
+  (`overview`/`wrist`). Passing `null` tells lerobot to infer input
+  features from the dataset instead of the base checkpoint config,
+  resolving the mismatch without renaming dataset keys.
 
 Confirms: SmolVLA base weights download (first invocation only — ~450M
 params from the Hugging Face Hub, needs network access, not cached on this
@@ -61,7 +75,8 @@ the ~5-10x-over-MPS estimate before committing to the full run below.
   --policy.path=lerobot/smolvla_base `
   --policy.push_to_hub=false `
   --policy.device=cuda `
-  --policy.use_amp=true `
+  --policy.use_amp=false `
+  --policy.input_features=null `
   --output_dir=outputs/train/smolvla_shape_sort_30000 `
   --job_name=smolvla_shape_sort_30000 `
   --wandb.enable=false `
@@ -76,7 +91,26 @@ total: 5000, 10000, ..., 30000) instead of only at the very end — lets you
 compare checkpoints or recover progress without waiting for the full run,
 and `--log_freq=50` keeps console output readable over a multi-hour run.
 
+**Resuming after an interruption.** Windows cannot create symlinks without
+Developer Mode enabled, so lerobot's `checkpoints/last` convenience link
+will not be written. If the run is interrupted, resume by pointing
+`--config_path` at the highest-numbered checkpoint directory explicitly:
+
+```powershell
+.venv-lerobot\Scripts\lerobot-train `
+  ... (same flags as above, minus --policy.path) ... `
+  --resume=true `
+  --config_path=outputs/train/smolvla_shape_sort_30000/checkpoints/005000/pretrained_model
+```
+
+Replace `005000` with the actual latest checkpoint step.
+
 ## After it finishes
+
+**Actual results (2026-08-07 run):** loss 0.469 → 0.031 over 30,000 steps,
+~5.3 steps/sec sustained, ~2 hours wall time (vs ~17h estimated on Mac MPS —
+roughly 10× speedup). GPU memory peaked at 3.06 GB of 12 GB available.
+All 6 checkpoints written: 005000, 010000, 015000, 020000, 025000, 030000.
 
 1. Verify: printed loss trend across the run (should decrease well past
    where the 500/2000-step runs plateaued), and a
