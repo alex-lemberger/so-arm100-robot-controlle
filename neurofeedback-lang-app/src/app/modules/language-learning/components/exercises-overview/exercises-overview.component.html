@@ -1,0 +1,86 @@
+<div class="exercises-container">
+  <!-- Categories Section -->
+  <!-- <section class="categories-section">
+    <h2>Exercises / Categories</h2>
+
+    <div class="categories-grid">
+      <mat-card *ngFor="let category of categories"
+                [routerLink]="category.route"
+                (click)="navigateToCategory(category)"
+                class="category-card">
+        <mat-card-content>
+          <mat-icon class="category-icon">{{category.icon}}</mat-icon>
+          <h3>{{category.name}}</h3>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  </section> -->
+
+  <!-- Recent Exercises Section -->
+  <section class="recent-exercises-section">
+    <h2>Recent Exercises</h2>
+
+    <div *ngIf="loading()" class="loading-indicator">
+      <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+      <p>Loading exercises...</p>
+    </div>
+
+    <div *ngIf="error() as errorMessage" class="error-message">
+      <p>{{ errorMessage }}</p>
+    </div>
+
+    <table mat-table [dataSource]="recentExercises()" class="recent-exercises-table" *ngIf="!loading()">
+      <!-- Title Column -->
+      <ng-container matColumnDef="title">
+        <th mat-header-cell *matHeaderCellDef>Title</th>
+        <td mat-cell *matCellDef="let exercise">{{exercise.title}}</td>
+      </ng-container>
+
+      <!-- Type Column -->
+      <ng-container matColumnDef="type">
+        <th mat-header-cell *matHeaderCellDef>Type</th>
+        <td mat-cell *matCellDef="let exercise">
+          <span [ngSwitch]="exercise.type">
+            <span *ngSwitchCase="'speaking'">Speaking</span>
+            <span *ngSwitchCase="'listening'">Listening</span>
+            <span *ngSwitchCase="'grammar'">Grammar</span>
+            <span *ngSwitchCase="'vocabulary'">Vocabulary</span>
+            <span *ngSwitchDefault>{{exercise.type}}</span>
+          </span>
+        </td>
+      </ng-container>
+
+      <!-- Progress Column -->
+      <ng-container matColumnDef="progress">
+        <th mat-header-cell *matHeaderCellDef>Progress</th>
+        <td mat-cell *matCellDef="let exercise">
+          <div class="progress-container">
+            <mat-progress-bar mode="determinate" [value]="exercise.progressPercentage"></mat-progress-bar>
+            <span class="progress-text">
+              {{exercise.progress?.current || 0}} / {{exercise.progress?.total || 0}}
+            </span>
+          </div>
+        </td>
+      </ng-container>
+
+      <!-- Focus Level Column -->
+      <ng-container matColumnDef="focusLevel">
+        <th mat-header-cell *matHeaderCellDef>Focus</th>
+        <td mat-cell *matCellDef="let exercise">
+          <span class="focus-level" [ngClass]="'focus-level-' + (exercise.focusLevel > 70 ? 'high' : exercise.focusLevel > 40 ? 'medium' : 'low')">
+            {{getFocusLevelText(exercise.focusLevel)}}
+          </span>
+        </td>
+      </ng-container>
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;"
+          [routerLink]="'/exercises/' + row.type + '/' + row.id"
+          class="exercise-row"></tr>
+    </table>
+
+    <div *ngIf="recentExercises().length === 0 && !loading() && !error()" class="no-exercises">
+      <p>No exercises available. Start by selecting a category above.</p>
+    </div>
+  </section>
+</div>

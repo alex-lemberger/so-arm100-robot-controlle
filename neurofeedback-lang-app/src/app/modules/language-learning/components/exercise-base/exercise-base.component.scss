@@ -1,0 +1,36 @@
+.exercise-meta {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.timer  {
+  display: flex;
+  align-items: center;
+  margin-right: 2rem;
+  mat-icon {
+    margin-right: 0.5rem;
+  }
+}
+
+.header-col {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.progress-bar {
+  display: flex;
+  mat-icon {
+    margin-right: 1rem;
+  }
+  .progress-bar-inner {
+    width: 100%;
+    align-self: center;
+
+  }
+}
+.back-btn {
+  margin-left: 1rem;
+}

@@ -1,0 +1,204 @@
+<div class="dash">
+
+  <!-- Page heading -->
+  <header class="dash__head">
+    <div>
+      <div class="dash__eyebrow">Dashboard</div>
+      <h1 class="dash__greeting">{{ greeting() }}, {{ userName() }}</h1>
+    </div>
+    <span class="dash__date">{{ today }}</span>
+  </header>
+
+  <!-- Live session band -->
+  <section class="band" aria-label="Live session">
+    <div class="band__session">
+      <div class="band__status">
+        <span class="band__dot" [class.band__dot--idle]="!sessionActive()"
+              role="img" [attr.aria-label]="sessionActive() ? 'Recording' : 'Idle'"></span>
+        <span class="band__status-label" [class.band__status-label--idle]="!sessionActive()">
+          {{ sessionActive() ? 'Live Session' : 'No Session' }}
+        </span>
+      </div>
+      <div class="band__timer">{{ timer() }}</div>
+      <div class="band__sub">Session 2 of 3 · Today</div>
+      @if (sessionActive()) {
+        <div class="flowbadge" [class.flowbadge--on]="inFlow()" aria-live="polite">
+          <span class="flowbadge__dot" aria-hidden="true"></span>
+          <span class="flowbadge__text">{{ inFlow() ? 'In Flow' : 'Building…' }}</span>
+          <span class="flowbadge__pct">{{ flowPercent() }}%</span>
+        </div>
+      }
+    </div>
+
+    <div class="band__divider" role="separator"></div>
+
+    <div class="metric-ring-wrapper">
+      <app-metric-ring [value]="focus()" label="Focus" icon="psychology"
+        [color]="focusColor" [paleColor]="focusPale"></app-metric-ring>
+      @if (isProxy()) {
+        <span class="proxy-badge" title="Heuristic — derived from interaction timing">heuristic</span>
+      }
+    </div>
+
+    <app-metric-ring [value]="calm()" label="Calm" icon="self_improvement"
+      [color]="CALM.main" [paleColor]="CALM.pale"></app-metric-ring>
+
+    <div class="band__wave">
+      <div class="band__wave-head">
+        <span class="band__wave-label">EEG · Alpha Band</span>
+        <span class="band__chip">8–13 Hz</span>
+      </div>
+      <app-eeg-waveform [color]="focusColor" [width]="210" [height]="50"></app-eeg-waveform>
+    </div>
+
+    <div class="band__action">
+      @if (deviceConnected()) {
+        <button type="button" class="btn btn--ghost btn--connected" (click)="disconnectDevice()">
+          <mat-icon>bluetooth_connected</mat-icon> Muse Connected
+        </button>
+      } @else {
+        <button type="button" class="btn btn--muse" [disabled]="connectBusy()" (click)="connectDevice()">
+          <mat-icon>bluetooth_searching</mat-icon> {{ connectBusy() ? 'Connecting…' : 'Connect Muse' }}
+        </button>
+      }
+      @if (deviceError()) {
+        <span class="band__error">{{ deviceError() }}</span>
+      }
+      @if (sessionActive()) {
+        <button type="button" class="btn btn--ghost" [disabled]="busy()" (click)="endSession()">
+          <mat-icon>stop_circle</mat-icon> End Session
+        </button>
+      } @else {
+        <button type="button" class="btn btn--primary" [disabled]="busy() || !deviceConnected()" (click)="startSession()">
+          <mat-icon>play_circle</mat-icon> Start Session
+        </button>
+      }
+    </div>
+  </section>
+
+  <!-- Two-column body -->
+  <div class="dash__grid">
+
+    <!-- Exercises -->
+    <section class="card practice">
+      <div class="practice__head">
+        <div>
+          <h2 class="card__title">Today's Practice</h2>
+          <p class="card__sub">30 min recommended · 1 of 3 complete</p>
+        </div>
+        <span class="streak">
+          <mat-icon class="streak__icon">local_fire_department</mat-icon>
+          <span class="streak__text">4-day streak</span>
+        </span>
+      </div>
+
+      <div class="practice__list" role="list">
+        @for (ex of exercises; track ex.id; let i = $index) {
+          <div class="row" role="listitem" tabindex="0"
+               [class.row--active]="i === 0"
+               [attr.aria-label]="ex.title + ', ' + ex.duration + ', ' + (i === 0 ? 'in progress' : ex.status)">
+            <span class="row__icon">
+              <mat-icon>{{ i === 0 ? 'play_arrow' : 'radio_button_unchecked' }}</mat-icon>
+            </span>
+            <div class="row__body">
+              <div class="row__title">{{ ex.title }}</div>
+              <div class="row__meta">
+                <span>{{ ex.lang }}</span><span class="row__sep"></span><span>{{ ex.duration }}</span>
+              </div>
+            </div>
+            @if (i === 0) {
+              <div class="row__focus">
+                <div class="row__focus-label">Focus</div>
+                <div class="row__focus-track">
+                  <div class="row__focus-fill" role="meter"
+                       [attr.aria-valuenow]="((focus() ?? 0) * 100) | number:'1.0-0'"
+                       aria-valuemin="0" aria-valuemax="100" aria-label="Current focus level"
+                       [style.width.%]="(focus() ?? 0) * 100"></div>
+                </div>
+              </div>
+            }
+            <button type="button" class="row__cta" [class.row__cta--active]="i === 0">
+              {{ i === 0 ? 'Active' : 'Start' }}
+            </button>
+          </div>
+        }
+      </div>
+    </section>
+
+    <!-- Insights -->
+    <aside class="insights">
+
+      <section class="card">
+        <div class="insights__head">
+          <h3 class="card__title">This Week</h3>
+          <div class="legend">
+            <span class="legend__item"><i class="legend__sw" [style.background]="focusColor"></i>Focus</span>
+            <span class="legend__item"><i class="legend__sw" [style.background]="CALM.main"></i>Calm</span>
+          </div>
+        </div>
+
+        <app-weekly-bar-chart [data]="weekly" [todayIndex]="todayIndex"
+          [calmColor]="CALM.main"></app-weekly-bar-chart>
+
+        <div class="stats">
+          <div>
+            <div class="stats__label">Avg Focus</div>
+            <div class="stats__value" [style.color]="focusColor">{{ avgFocus }}</div>
+          </div>
+          <div>
+            <div class="stats__label">Avg Calm</div>
+            <div class="stats__value" [style.color]="CALM.main">{{ avgCalm }}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card goal">
+        <span class="icon-tile">
+          <mat-icon>calendar_today</mat-icon>
+        </span>
+        <div class="goal__body">
+          <div class="goal__title">5 sessions this week</div>
+          <div class="goal__sub">2 h 14 min total · Goal: 3 h</div>
+        </div>
+        <div class="goal__ring">
+          <svg width="44" height="44" viewBox="0 0 44 44" role="img"
+               [attr.aria-label]="goalPercent + '% of weekly time goal reached'">
+            <circle cx="22" cy="22" r="18" fill="none" stroke="var(--c-azure-pale)" stroke-width="5"/>
+            <circle cx="22" cy="22" r="18" fill="none" stroke="var(--c-azure-mid)"
+                    stroke-width="5" stroke-linecap="round"
+                    [attr.stroke-dasharray]="goalCirc + ' ' + goalCirc"
+                    [attr.stroke-dashoffset]="goalOffset"
+                    transform="rotate(-90 22 22)" class="goal__arc"/>
+            <text x="22" y="22" text-anchor="middle" dominant-baseline="central"
+                  class="goal__pct">{{ goalPercent }}%</text>
+          </svg>
+        </div>
+      </section>
+
+      <button type="button" class="card link" aria-label="View all sessions">
+        <span class="icon-tile icon-tile--muted">
+          <mat-icon>timeline</mat-icon>
+        </span>
+        <div class="link__body">
+          <div class="link__title">View all sessions</div>
+          <div class="link__sub">History &amp; recordings</div>
+        </div>
+        <mat-icon class="link__chev">chevron_right</mat-icon>
+      </button>
+
+    </aside>
+  </div>
+
+  <section class="card captures-section">
+    <div class="captures-header">
+      <div>
+        <h2 class="card__title">Aufzeichnungen</h2>
+        <p class="card__sub">Abgeschlossene Capture-Sitzungen</p>
+      </div>
+      @if (captureSessionCount() > 0) {
+        <span class="captures-badge">{{ captureSessionCount() }}</span>
+      }
+    </div>
+    <app-capture-sessions-table />
+  </section>
+</div>

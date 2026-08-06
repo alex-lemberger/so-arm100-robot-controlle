@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// POC: workers are anonymous (no Firebase Auth). Rules allow writes by path.
+// Before production: require request.auth != null.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Worker consent record — created once per device, updated on re-consent
+    match /workers/{workerId} {
+      allow create, update: if true;
+      allow read, delete: if false;
+    }
+
+    // Capture session document — created and updated by the tablet during capture
+    match /captures/{sessionId} {
+      allow create, update: if true;
+      allow read, delete: if false;
+    }
+
+    // EEG ticks — high-frequency writes during a live session
+    match /captures/{sessionId}/eeg/{tickId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
+  }
+}

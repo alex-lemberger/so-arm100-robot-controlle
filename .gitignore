@@ -35,3 +35,32 @@ __pycache__/
 
 # handwerk-robot-sim
 /handwerk-robot-sim/models/ur5e/
+
+# neurofeedback-lang-app
+/neurofeedback-lang-app/tmp/
+/neurofeedback-lang-app/out-tsc/
+/neurofeedback-lang-app/bazel-out/
+/neurofeedback-lang-app/.angular/
+/neurofeedback-lang-app/connect.lock
+/neurofeedback-lang-app/typings/
+/neurofeedback-lang-app/docs/local-model/BUNDLE.md
+npm-debug.log
+yarn-error.log
+libpeerconnection.log
+testem.log
+Thumbs.db
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/*
+.sass-cache/
+.aider*

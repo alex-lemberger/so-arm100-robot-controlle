@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "mujoco-python": {
+      "source": "prathje/agentic_mujoco_skills",
+      "sourceType": "github",
+      "skillPath": "skills/mujoco-python/SKILL.md",
+      "computedHash": "86961544a65a178c3c5780b2ec562c86a84fa5eeccbe6cf5d03348d9778a03f9"
+    }
+  }
+}

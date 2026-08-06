@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// POC: workers are anonymous (localStorage UUID, no Firebase Auth).
+// Rules restrict by path and size only.
+// Before production: add signInAnonymously() in WorkerConsentComponent,
+// then change every `allow write` to `if request.auth != null && ...`.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    match /captures/{sessionId}/video.mp4 {
+      // MediaRecorder produces video/mp4 or video/webm depending on device
+      allow write: if request.resource.size < 500 * 1024 * 1024
+                   && request.resource.contentType.matches('video/.*');
+      allow read: if false;
+    }
+
+    match /captures/{sessionId}/imu_left.bin {
+      // 50 Hz × 7 floats × 4 bytes × 3600 s ≈ 5 MB/hour — 10 MB is safe
+      allow write: if request.resource.size < 10 * 1024 * 1024;
+      allow read: if false;
+    }
+
+    match /captures/{sessionId}/imu_right.bin {
+      allow write: if request.resource.size < 10 * 1024 * 1024;
+      allow read: if false;
+    }
+
+  }
+}

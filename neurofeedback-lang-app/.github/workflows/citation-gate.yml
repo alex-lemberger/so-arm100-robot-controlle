@@ -1,0 +1,36 @@
+name: Citation gate
+
+# Enforces AGENTS.md Operating Principle #12: every citation in review/spec/
+# analysis docs must resolve to a real file:line, a real AGENTS.md rule number,
+# or quoted heading text. A stated rule cannot stop a weak model from
+# confabulating references — this gate rejects unverifiable ones mechanically.
+
+on:
+  pull_request:
+    paths:
+      - 'specs/**/*.md'
+      - 'analyses/**/*.md'
+      - 'plans/**/*.md'
+      - 'AGENTS.md'
+      - 'scripts/check-citations.mjs'
+      - '.github/workflows/citation-gate.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'specs/**/*.md'
+      - 'analyses/**/*.md'
+      - 'plans/**/*.md'
+      - 'AGENTS.md'
+      - 'scripts/check-citations.mjs'
+      - '.github/workflows/citation-gate.yml'
+
+jobs:
+  citations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check citations resolve to ground truth
+        run: node scripts/check-citations.mjs

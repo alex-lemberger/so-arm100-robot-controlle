@@ -1,0 +1,12 @@
+.chart-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.line {
+  stroke: steelblue;
+  fill: none;
+  stroke-width: 2px;
+}

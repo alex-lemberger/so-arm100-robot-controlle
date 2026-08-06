@@ -1,0 +1,64 @@
+
+    <app-exercise-base
+      *ngIf="currentExerciseForBase()"
+      [exercise]="currentExerciseForBase()"
+      (onPause)="handlePause()"
+      (onPrevious)="handlePrevious()"
+      (onNext)="handleNext()"
+      (onExit)="navigateBack()">
+
+      <div class="speaking-content">
+        <h3>Repeat the following phrase:</h3>
+        <div class="phrase">"{{ exercise()?.phrase }}"</div>
+
+        <div class="controls">
+          <button mat-raised-button
+                  color="primary"
+                  [disabled]="isRecording() || !exercise()?.audioUrl"
+                  (click)="playExample()">
+            <mat-icon>play_arrow</mat-icon>
+            Play Example2
+          </button>
+
+          <button mat-raised-button
+                  color="accent"
+                  [disabled]="isRecording() || isPlaying()"
+                  (click)="startRecording()">
+            <mat-icon>mic</mat-icon>
+            Start Recording
+          </button>
+
+          <button mat-raised-button
+                  [disabled]="!recordedAudioUrl() || isRecording() || isPlaying()"
+                  (click)="playRecording()">
+            <mat-icon>play_circle</mat-icon>
+            Play Recording
+          </button>
+
+          <button mat-raised-button
+                  color="warn"
+                  [disabled]="!isRecording()"
+                  (click)="stopRecording()">
+            <mat-icon>stop</mat-icon>
+            Stop
+          </button>
+        </div>
+
+        <div class="status-messages">
+          <div *ngIf="isRecording()" class="recording-status">
+            Recording... {{ recordingDuration() }}s
+          </div>
+          <div *ngIf="isPlaying()" class="playing-status">
+            Playing...
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="loading()" class="loading-indicator">
+        Loading exercise...
+      </div>
+
+      <div *ngIf="error() as error" class="error-message">
+        {{ error }}
+      </div>
+    </app-exercise-base>

@@ -1,0 +1,54 @@
+
+    <div class="exercise-container" *ngIf="exercise">
+      <!-- Header -->
+      <div class="exercise-header">
+        <h2>Exercise: {{ exercise.title }}</h2>
+        <div class="header-col">
+        <div class="exercise-meta">
+          <div class="timer">
+            <mat-icon>timer</mat-icon>
+            {{ exercise.duration | minutes }}
+          </div>
+          <button mat-stroked-button (click)="onPause.emit()">
+            <mat-icon>pause</mat-icon>
+            Pause
+          </button>
+          <button mat-stroked-button (click)="onExit.emit()" class="back-btn">
+            <mat-icon>arrow_left</mat-icon>
+            Back to the List
+          </button>
+        </div>
+        <!-- Progress -->
+      <div class="progress-bar">
+      <mat-icon>downloading</mat-icon>
+        <div class="progress-bar-inner">
+        <div class="progress"
+             [style.width.%]="(exercise.progress.current / exercise.progress.total) * 100">
+        </div>
+        <span class="progress-text">
+          Progress: {{exercise.progress.current}}/{{exercise.progress.total}}
+        </span>
+        </div>
+      </div>
+        </div>
+      </div>
+
+      <!-- Content -->
+      <div class="exercise-content">
+        <ng-content></ng-content>
+      </div>
+
+      <!-- Navigation -->
+      <div class="exercise-navigation">
+        <button mat-button (click)="onPrevious.emit()" [disabled]="exercise.progress.current === 1">
+          <mat-icon>arrow_back</mat-icon>
+          Previous
+        </button>
+        <button mat-button (click)="onNext.emit()"
+                [disabled]="exercise.progress.current === exercise.progress.total">
+          Next
+          <mat-icon>arrow_forward</mat-icon>
+        </button>
+      </div>
+    </div>
+  
