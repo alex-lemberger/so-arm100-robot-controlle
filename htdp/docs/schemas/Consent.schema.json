@@ -1,0 +1,66 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "commercial_use": {
+      "default": false,
+      "title": "Commercial Use",
+      "type": "boolean"
+    },
+    "consent_form_version": {
+      "title": "Consent Form Version",
+      "type": "string"
+    },
+    "delete_after": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delete After"
+    },
+    "derived_features_only": {
+      "default": false,
+      "title": "Derived Features Only",
+      "type": "boolean"
+    },
+    "distribute_raw_eeg": {
+      "default": false,
+      "title": "Distribute Raw Eeg",
+      "type": "boolean"
+    },
+    "distribute_raw_video": {
+      "default": false,
+      "title": "Distribute Raw Video",
+      "type": "boolean"
+    },
+    "internal_only": {
+      "default": true,
+      "title": "Internal Only",
+      "type": "boolean"
+    },
+    "model_training": {
+      "default": false,
+      "title": "Model Training",
+      "type": "boolean"
+    },
+    "public_release": {
+      "default": false,
+      "title": "Public Release",
+      "type": "boolean"
+    },
+    "third_party_access": {
+      "default": false,
+      "title": "Third Party Access",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "consent_form_version"
+  ],
+  "title": "Consent",
+  "type": "object"
+}

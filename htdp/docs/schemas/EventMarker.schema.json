@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "EventLabel": {
+      "enum": [
+        "start",
+        "grasp",
+        "release",
+        "place",
+        "stop"
+      ],
+      "title": "EventLabel",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "confidence": {
+      "default": 1.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "integer"
+    },
+    "label": {
+      "$ref": "#/$defs/EventLabel"
+    },
+    "notes": {
+      "default": "",
+      "title": "Notes",
+      "type": "string"
+    },
+    "phase": {
+      "title": "Phase",
+      "type": "string"
+    },
+    "source": {
+      "default": "synthetic",
+      "title": "Source",
+      "type": "string"
+    },
+    "timestamp_s": {
+      "title": "Timestamp S",
+      "type": "number"
+    }
+  },
+  "required": [
+    "timestamp_s",
+    "event_id",
+    "label",
+    "phase"
+  ],
+  "title": "EventMarker",
+  "type": "object"
+}

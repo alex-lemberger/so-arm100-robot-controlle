@@ -1,0 +1,12 @@
+{
+  "policy": {
+    "success_rate": 0.6666666666666666,
+    "mean_place_error": 0.08913342975657189,
+    "n": 6
+  },
+  "baseline": {
+    "success_rate": 1.0,
+    "mean_place_error": 0.008360256225822848,
+    "n": 6
+  }
+}

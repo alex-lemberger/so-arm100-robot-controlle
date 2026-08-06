@@ -1,0 +1,19 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "cohort": {
+      "default": "synthetic",
+      "title": "Cohort",
+      "type": "string"
+    },
+    "participant_id": {
+      "title": "Participant Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "participant_id"
+  ],
+  "title": "Participant",
+  "type": "object"
+}

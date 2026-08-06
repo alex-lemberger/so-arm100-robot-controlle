@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>QC Report</title></head>
+<body>
+<h1>QC Report — overall: {{ report.overall }}</h1>
+<table border="1" cellpadding="6">
+<tr><th>Check</th><th>Severity</th><th>Detail</th></tr>
+{% for c in report.checks %}
+<tr><td>{{ c.name }}</td><td>{{ c.severity }}</td><td>{{ c.detail }}</td></tr>
+{% endfor %}
+</table>
+</body></html>

@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "CoordinateFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "default": "x=right,y=forward,z=up",
+          "title": "Axes",
+          "type": "string"
+        },
+        "handedness": {
+          "default": "right",
+          "title": "Handedness",
+          "type": "string"
+        },
+        "quaternion_order": {
+          "default": "w,x,y,z",
+          "title": "Quaternion Order",
+          "type": "string"
+        },
+        "time_unit": {
+          "default": "seconds",
+          "title": "Time Unit",
+          "type": "string"
+        },
+        "units": {
+          "default": "meters",
+          "title": "Units",
+          "type": "string"
+        }
+      },
+      "title": "CoordinateFrame",
+      "type": "object"
+    },
+    "StreamRef": {
+      "additionalProperties": false,
+      "properties": {
+        "fmt": {
+          "title": "Fmt",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "rate_hz": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Hz"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "fmt",
+        "role"
+      ],
+      "title": "StreamRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "device_config_id": {
+      "title": "Device Config Id",
+      "type": "string"
+    },
+    "frame": {
+      "$ref": "#/$defs/CoordinateFrame"
+    },
+    "streams": {
+      "items": {
+        "$ref": "#/$defs/StreamRef"
+      },
+      "title": "Streams",
+      "type": "array"
+    }
+  },
+  "required": [
+    "device_config_id"
+  ],
+  "title": "DeviceConfig",
+  "type": "object"
+}

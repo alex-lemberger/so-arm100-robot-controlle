@@ -1,0 +1,131 @@
+You are executing ONE task only: Task 2. Do this task and then STOP. Do not start Task 3.
+Do not design, rename, refactor, invent functions, or "improve" anything. Copy the code
+below CHAR-FOR-CHAR. If anything seems wrong, STOP and report — do not work around it.
+
+REPO: /Users/alexanderlemberger/human-task-dataset-pipeline
+
+HARD FENCE — you may create/modify ONLY these two files this task:
+  CREATE: src/htdp/replay/arm_ik.py
+  CREATE: tests/replay/test_arm_ik.py
+You must NOT open, edit, or even read-then-write any other file. In particular it is
+FORBIDDEN to modify src/htdp/replay/ik.py — you only IMPORT from it. Do NOT create
+test_ik_solver.py. Do NOT create functions named compute_ik / compute_ik_position_only /
+compute_ik_trajectory — those do not exist in this plan. The ONLY new function is
+solve_arm_ik. If you feel the urge to touch ik.py, STOP and report instead.
+
+SETUP:
+  1. cd /Users/alexanderlemberger/human-task-dataset-pipeline
+  2. git status  --> MUST be clean. If not, STOP and report.
+  3. uv run --extra replay python -c "import mujoco, mink, daqp; print('DEPS-OK')"
+     MUST print DEPS-OK. Else STOP.
+
+STEP 1 — Create tests/replay/test_arm_ik.py with EXACTLY this content:
+-----------------------------------------------------------------------
+import pytest
+pytest.importorskip("mujoco")
+pytest.importorskip("mink")
+
+from htdp.replay.arm_ik import solve_arm_ik
+
+
+def _line(n=20):
+    # a short reachable Cartesian path in front of the SO-ARM100 base (metres)
+    return [(0.04 * i, 0.0 + 0.18, 0.0, 0.10 + 0.005 * i, 1.0, 0.0, 0.0, 0.0) for i in range(n)]
+
+
+def test_arm_ik_tracks_and_is_deterministic():
+    a = solve_arm_ik(_line())
+    b = solve_arm_ik(_line())
+    assert a.max_error < 0.03
+    assert a.joint_trajectory == b.joint_trajectory
+    assert len(a.joint_trajectory) == 20
+-----------------------------------------------------------------------
+
+STEP 2 — Run it, confirm it FAILS for the right reason:
+  uv run --extra replay pytest tests/replay/test_arm_ik.py -v
+  EXPECTED: FAIL with ModuleNotFoundError: htdp.replay.arm_ik
+  If it fails any other way, STOP and report.
+
+STEP 3 — Create src/htdp/replay/arm_ik.py with EXACTLY this content:
+-----------------------------------------------------------------------
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from htdp.replay.ik import IkUnavailable
+from htdp.replay.so_arm100 import EEF_BODY, SO_ARM100_XML
+
+
+@dataclass
+class ArmIkResult:
+    joint_trajectory: list[list[float]]
+    timestamps: list[float]
+    targets: list[tuple[float, float, float]]
+    errors: list[float]
+    max_error: float
+
+
+def solve_arm_ik(pose, *, ik_iters: int = 10) -> ArmIkResult:  # type: ignore[no-untyped-def]
+    try:
+        import mink  # type: ignore[import-not-found]
+        import mujoco  # type: ignore[import-not-found]
+        import numpy as np
+        from mink.lie.se3 import SE3  # type: ignore[import-not-found]
+    except ModuleNotFoundError as exc:
+        raise IkUnavailable("install with: uv sync --extra replay") from exc
+
+    model = mujoco.MjModel.from_xml_path(str(SO_ARM100_XML))
+    data = mujoco.MjData(model)
+    cfg = mink.Configuration(model)
+    cfg.update(data.qpos)
+    task = mink.FrameTask(
+        frame_name=EEF_BODY, frame_type="body",
+        position_cost=1.0, orientation_cost=0.0, lm_damping=1.0,
+    )
+    limits = [mink.ConfigurationLimit(model)]
+    eid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, EEF_BODY)
+    dt = model.opt.timestep
+
+    traj: list[list[float]] = []
+    ts: list[float] = []
+    targets: list[tuple[float, float, float]] = []
+    errors: list[float] = []
+    max_error = 0.0
+    for sample in pose:
+        t, x, y, z = sample[0], sample[1], sample[2], sample[3]
+        target = np.array([x, y, z])
+        task.set_target(SE3.from_translation(target))
+        for _ in range(ik_iters):
+            vel = mink.solve_ik(cfg, [task], dt, "daqp", limits=limits)
+            cfg.integrate_inplace(vel, dt)
+        mujoco.mj_forward(model, cfg.data)
+        traj.append([float(q) for q in cfg.data.qpos])
+        err = float(np.linalg.norm(cfg.data.xpos[eid] - target))
+        ts.append(float(t)); targets.append((float(x), float(y), float(z))); errors.append(err)
+        max_error = max(max_error, err)
+    return ArmIkResult(traj, ts, targets, errors, max_error)
+-----------------------------------------------------------------------
+
+STEP 4 — Run it, confirm it PASSES with 0 skipped:
+  uv run --extra replay pytest tests/replay/test_arm_ik.py -v -rs
+  EXPECTED: PASS (not SKIPPED).
+  If max_error is too high (test fails on the assert a.max_error < 0.03): the _line path is
+  outside the SO-ARM100 workspace. This is the ONE allowed tuning: in test_arm_ik.py's _line,
+  shrink the reach toward the base — change the x term `0.04 * i` to `0.02 * i` and the y
+  `0.18` to `0.15`. Re-run. If it still fails, STOP and report (do NOT edit arm_ik.py to force
+  it, do NOT touch ik.py or so_arm100.py).
+
+STEP 5 — Full gate, must be all green:
+  uv run ruff format --check . && uv run ruff check . && uv run --extra replay pytest -q && uv run mypy src
+  If red, STOP and report.
+
+STEP 6 — Confirm you touched ONLY the two allowed files:
+  git status --short
+  EXPECTED: exactly two new files — src/htdp/replay/arm_ik.py and tests/replay/test_arm_ik.py.
+  If ik.py or anything else shows as modified, STOP and report (do NOT commit).
+
+STEP 7 — Commit (exact message), then STOP:
+  git add src/htdp/replay/arm_ik.py tests/replay/test_arm_ik.py
+  git commit -m "feat(replay): position-tracking IK retargeted onto SO-ARM100"
+
+Then STOP. Do not start Task 3. Report: "Task 2 done" + paste the STEP 5 gate output.

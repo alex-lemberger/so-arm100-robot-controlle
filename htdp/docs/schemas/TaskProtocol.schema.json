@@ -1,0 +1,27 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "phases": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Phases",
+      "type": "array"
+    },
+    "protocol_id": {
+      "title": "Protocol Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_id",
+    "title",
+    "phases"
+  ],
+  "title": "TaskProtocol",
+  "type": "object"
+}

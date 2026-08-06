@@ -1,0 +1,49 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "absent_modalities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Absent Modalities",
+      "type": "array"
+    },
+    "absent_modalities_by_session": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Absent Modalities By Session",
+      "type": "object"
+    },
+    "manifest_sha256": {
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "profile": {
+      "title": "Profile",
+      "type": "string"
+    },
+    "release_name": {
+      "title": "Release Name",
+      "type": "string"
+    },
+    "session_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Session Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "release_name",
+    "profile",
+    "session_ids",
+    "manifest_sha256"
+  ],
+  "title": "DatasetRelease",
+  "type": "object"
+}

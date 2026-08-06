@@ -1,0 +1,283 @@
+# HTDP task ontology — annotation vocabulary for human/robot demonstrations.
+# Built with the ontology-building skill (~/.claude/skills/ontology-building).
+# Validate: python3 <skill>/tools/validate.py ontology/htdp-tasks.yaml --strict
+# CQ gate:  python3 <skill>/tools/cq_check.py ontology/htdp-tasks.yaml ontology/competency-questions.yaml
+# Sources: protocols/reach-grasp-place.md, docs/schemas/EventMarker.schema.json,
+#          M2.5 sim loop (docs/SIM_LOOP.md). Scope: what happens IN a demo;
+#          pipeline infra (QC/consent/session) stays in docs/schemas.
+
+ontology:
+  id: htdp-tasks
+  version: 0.2.0
+  description: >
+    Tasks, phases, actions, objects, effectors, and event markers for annotating
+    HTDP demonstrations, aligned across real capture (reach-grasp-place protocol)
+    and simulation (M2.5 pick-and-place).
+
+relations:
+  - id: has_phase
+    label: has phase
+    domain: task
+    range: phase
+    description: A task decomposes into temporally contiguous phases.
+  - id: precedes
+    label: precedes
+    domain: phase
+    range: phase
+    description: Phase ordering within a task; the protocol event-ordering invariant projected onto phases.
+  - id: performs
+    label: performs
+    domain: phase
+    range: action
+    description: A motor action that occurs within a phase.
+  - id: ends_with
+    label: ends with
+    domain: phase
+    range: event_marker
+    description: The software event marker that terminates a phase (protocols/reach-grasp-place.md phase table).
+  - id: acts_on
+    label: acts on
+    domain: action
+    range: manipulable_object
+    description: The object an action manipulates or contacts.
+  - id: uses_effector
+    label: uses effector
+    domain: action
+    range: effector
+    description: The body part or end-effector that executes an action.
+  - id: has_target
+    label: has target
+    domain: action
+    range: location
+    description: The location an action delivers its object to.
+  - id: variant_of
+    label: variant of
+    domain: task
+    range: task
+    description: Task realizes the same goal structure as a canonical task in another setting (e.g. sim vs real capture).
+  - id: occurs_in
+    label: occurs in
+    domain: failure_mode
+    range: phase
+    description: The phase during which a failure mode manifests, for per-phase breakdown of failed trials.
+
+classes:
+  # --- roots ---
+  - id: entity
+    label: Entity
+    definition: Root class; anything referred to in a demonstration annotation.
+
+  - id: process
+    label: Process
+    definition: Something that unfolds over time within a demonstration.
+    is_a: entity
+  - id: physical_object
+    label: Physical Object
+    definition: A tangible thing present in the capture or simulation workspace.
+    is_a: entity
+  - id: location
+    label: Location
+    definition: A spatial region of the workspace referenced by an action, independent of any object occupying it.
+    is_a: entity
+  - id: event_marker
+    label: Event Marker
+    definition: A discrete software-annotated timestamp labeling a boundary in the demonstration timeline (EventMarker.schema.json label enum).
+    is_a: entity
+
+  # --- processes ---
+  - id: task
+    label: Task
+    definition: A goal-directed process spanning a whole trial, composed of ordered phases.
+    is_a: process
+  - id: phase
+    label: Phase
+    definition: A temporally contiguous segment of a task, terminated by an event marker.
+    is_a: process
+    synonyms: [segment]
+  - id: action
+    label: Action
+    definition: An atomic motor act performed by one effector, possibly on an object.
+    is_a: process
+    synonyms: [motor act]
+
+  # --- tasks ---
+  - id: reach_grasp_place
+    label: Reach-Grasp-Place
+    definition: Canonical HTDP manipulation task; reaching for an object, grasping, transporting, and placing it at a target zone (protocol reach-grasp-place-v0.1).
+    is_a: task
+  - id: pick_place
+    label: Pick and Place
+    definition: Simulation realization of reach-grasp-place; a Franka Panda gripper grasps a cube under physics and delivers it to a sampled target (M2.5 sim loop).
+    is_a: task
+
+  # --- phases (protocol phase table; suffixed to avoid id collision with actions) ---
+  - id: baseline_phase
+    label: Baseline
+    definition: Rest segment before movement; participant hands at sides, terminated by the start marker.
+    is_a: phase
+  - id: reach_phase
+    label: Reach Phase
+    definition: Segment from movement onset until the object is grasped.
+    is_a: phase
+  - id: transport_phase
+    label: Transport Phase
+    definition: Segment while the grasped object moves toward the target zone.
+    is_a: phase
+  - id: place_phase
+    label: Place Phase
+    definition: Segment in which the object is set down at the target zone and let go.
+    is_a: phase
+  - id: return_phase
+    label: Return Phase
+    definition: Segment after object release while the effector returns to rest.
+    is_a: phase
+
+  # --- actions ---
+  - id: reach
+    label: Reach
+    definition: Moving the free effector toward an object until contact is possible.
+    is_a: action
+  - id: grasp
+    label: Grasp
+    definition: Closing the hand or gripper around an object to attain a stable hold.
+    is_a: action
+    synonyms: [prehension]
+    examples: [power grasp, friction grasp on cube]
+  - id: transport
+    label: Transport
+    definition: Moving a held object through free space toward a target location.
+    is_a: action
+    synonyms: [carry]
+  - id: place
+    label: Place
+    definition: Setting a held object down at a target location.
+    is_a: action
+  - id: release
+    label: Release
+    definition: Opening the effector to relinquish a held object.
+    is_a: action
+  - id: retract
+    label: Retract
+    definition: Withdrawing the empty effector from the workspace back to rest.
+    is_a: action
+
+  # --- failure modes (per-phase eval breakdown; observed in M2.5 evals, needed for R1 real trials) ---
+  - id: failure_mode
+    label: Failure Mode
+    definition: A way a trial deviates from its task goal, attributable to a phase of the demonstration.
+    is_a: process
+  - id: missed_grasp
+    label: Missed Grasp
+    definition: The effector closes without attaining a stable hold on the object.
+    is_a: failure_mode
+    examples: [gripper closes beside cube, fingers slip off cylinder]
+  - id: object_drop
+    label: Object Drop
+    definition: A held object leaves the effector unintentionally before the target is reached.
+    is_a: failure_mode
+    synonyms: [grasp slip]
+  - id: misplacement
+    label: Misplacement
+    definition: The object is set down outside the target zone or in an unstable pose.
+    is_a: failure_mode
+
+  # --- physical objects ---
+  - id: manipulable_object
+    label: Manipulable Object
+    definition: A physical object small and light enough to be grasped and moved by one effector.
+    is_a: physical_object
+    synonyms: [graspable object]
+  - id: cylinder
+    label: Cylinder
+    definition: The ~8 cm graspable cylinder used as the manipulation target in the reach-grasp-place protocol.
+    is_a: manipulable_object
+  - id: cube
+    label: Cube
+    definition: The rigid cube used as the manipulation target in the M2.5 physics simulation.
+    is_a: manipulable_object
+  - id: effector
+    label: Effector
+    definition: A physical object that executes motor actions by contacting and holding other objects.
+    is_a: physical_object
+    synonyms: [end-effector]
+  - id: hand
+    label: Hand
+    definition: A human hand acting as effector in real capture sessions.
+    is_a: effector
+  - id: gripper
+    label: Gripper
+    definition: A robot parallel-jaw end-effector (Franka Panda in sim, SO-ARM in R1) acting as effector.
+    is_a: effector
+
+  # --- locations ---
+  - id: target_zone
+    label: Target Zone
+    definition: The marked region of the work surface where the object must be delivered.
+    is_a: location
+
+  # --- event markers (EventMarker.schema.json enum; prefixed to avoid action id collision) ---
+  - id: marker_start
+    label: Start Marker
+    definition: Event marking session start at the end of the baseline rest segment.
+    is_a: event_marker
+  - id: marker_grasp
+    label: Grasp Marker
+    definition: Event marking the moment the object is grasped, terminating the reach phase.
+    is_a: event_marker
+  - id: marker_release
+    label: Release Marker
+    definition: Event terminating the transport phase per the protocol ordering invariant.
+    is_a: event_marker
+  - id: marker_place
+    label: Place Marker
+    definition: Event marking the object placed at the target zone, terminating the place phase.
+    is_a: event_marker
+  - id: marker_stop
+    label: Stop Marker
+    definition: Event marking session end once the effector has returned to rest.
+    is_a: event_marker
+
+edges:
+  # task decomposition (cq_task_phases)
+  - [reach_grasp_place, has_phase, baseline_phase]
+  - [reach_grasp_place, has_phase, reach_phase]
+  - [reach_grasp_place, has_phase, transport_phase]
+  - [reach_grasp_place, has_phase, place_phase]
+  - [reach_grasp_place, has_phase, return_phase]
+  # phase ordering (cq_task_phases)
+  - [baseline_phase, precedes, reach_phase]
+  - [reach_phase, precedes, transport_phase]
+  - [transport_phase, precedes, place_phase]
+  - [place_phase, precedes, return_phase]
+  # actions within phases (cq_phase_actions)
+  - [reach_phase, performs, reach]
+  - [reach_phase, performs, grasp]
+  - [transport_phase, performs, transport]
+  - [place_phase, performs, place]
+  - [place_phase, performs, release]
+  - [return_phase, performs, retract]
+  # phase-terminating markers (cq_phase_boundaries)
+  - [baseline_phase, ends_with, marker_start]
+  - [reach_phase, ends_with, marker_grasp]
+  - [transport_phase, ends_with, marker_release]
+  - [place_phase, ends_with, marker_place]
+  - [return_phase, ends_with, marker_stop]
+  # action-object bindings (cq_action_object)
+  - [grasp, acts_on, cylinder]
+  - [grasp, acts_on, cube]
+  - [transport, acts_on, cylinder]
+  - [place, acts_on, cylinder]
+  - [release, acts_on, cylinder]
+  # effectors (cq_action_effector)
+  - [grasp, uses_effector, hand]
+  - [grasp, uses_effector, gripper]
+  - [place, uses_effector, hand]
+  # targets (cq_place_target)
+  - [place, has_target, target_zone]
+  # sim/real alignment (cq_sim_real_variant)
+  - [pick_place, variant_of, reach_grasp_place]
+  # failure modes per phase (cq_failure_modes)
+  - [missed_grasp, occurs_in, reach_phase]
+  - [object_drop, occurs_in, transport_phase]
+  - [object_drop, occurs_in, place_phase]
+  - [misplacement, occurs_in, place_phase]

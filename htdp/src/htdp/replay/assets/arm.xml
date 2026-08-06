@@ -1,0 +1,29 @@
+<mujoco model="htdp_arm6">
+  <option timestep="0.01"/>
+  <worldbody>
+    <body name="link0">
+      <joint name="j0" type="hinge" axis="0 0 1"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.04"/>
+      <body name="link1" pos="0 0 0.2">
+        <joint name="j1" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.4" size="0.035"/>
+        <body name="link2" pos="0 0 0.4">
+          <joint name="j2" type="hinge" axis="0 1 0"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.4" size="0.03"/>
+          <body name="link3" pos="0 0 0.4">
+            <joint name="j3" type="hinge" axis="0 0 1"/>
+            <geom type="capsule" fromto="0 0 0 0 0 0.1" size="0.025"/>
+            <body name="link4" pos="0 0 0.1">
+              <joint name="j4" type="hinge" axis="0 1 0"/>
+              <geom type="capsule" fromto="0 0 0 0 0 0.1" size="0.022"/>
+              <body name="eef" pos="0 0 0.1">
+                <joint name="j5" type="hinge" axis="1 0 0"/>
+                <geom type="sphere" size="0.03"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

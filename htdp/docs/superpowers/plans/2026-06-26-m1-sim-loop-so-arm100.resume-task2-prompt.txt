@@ -1,0 +1,55 @@
+You are RESUMING a pre-written implementation plan. Task 1 is already DONE and committed
+(do NOT redo it). Follow the plan EXACTLY from Task 2. Do not design, redesign, improvise,
+optimize, or refactor. If something seems wrong or contradictory: STOP and report.
+
+REPO: /Users/alexanderlemberger/human-task-dataset-pipeline
+PLAN: /Users/alexanderlemberger/human-task-dataset-pipeline/docs/superpowers/plans/2026-06-26-m1-sim-loop-so-arm100.md
+
+ALREADY DONE (do not touch, do not redo):
+  - Task 1: SO-ARM100 model vendored + src/htdp/replay/so_arm100.py with verified names
+    (EEF_BODY="Moving_Jaw", ARM_JOINTS, GRIPPER_JOINT="Jaw"). Committed.
+
+SETUP (run once, before Task 2):
+  1. cd /Users/alexanderlemberger/human-task-dataset-pipeline
+  2. uv sync --extra replay --extra dev
+  3. git status  --> MUST be clean. If not, STOP and report.
+  4. uv run --extra replay python -c "import mujoco, mink, daqp; print('DEPS-OK')"
+     MUST print DEPS-OK (do NOT import imageio — it is added at Task 5). Else STOP.
+
+START AT: Task 2. Then Tasks 3, 4, 5, 6 IN ORDER.
+
+EXECUTION RULES:
+  1. Execute Tasks 2->6 in order. Never skip, reorder, or merge.
+  2. Steps literal. Write file content CHAR-FOR-CHAR. No renames, refactors, added comments,
+     signature changes, reformatting.
+  3. TDD: a "verify it fails" step MUST fail for the stated reason. A "verify it passes" step
+     MUST pass with 0 SKIPPED. Fix failures ONLY via that task's written tuning notes. A fix
+     not in the plan -> STOP and report.
+  4. One commit per task, EXACT message from the plan. No amend, squash, --no-verify.
+  5. Use the names from so_arm100.py as-is (Moving_Jaw / Jaw etc.). In Task 3's task_scene.xml,
+     set the weld body1 to "Moving_Jaw" (the real EEF_BODY), NOT the literal "gripper" in the
+     plan's example. Same for any "gripper" placeholder -> use Moving_Jaw.
+  6. Touch ONLY the current task's "Files:". NEVER modify: src/htdp/replay/ik.py, player.py,
+     assets/arm.xml, so_arm100.py, src/htdp/synth/**, export/**, ingest/**, catalog.py.
+  7. Full gate after EVERY task:
+       uv run ruff format --check . && uv run ruff check . && uv run --extra replay pytest -q && uv run mypy src
+     Red -> STOP and report.
+
+FALSE-GREEN GUARD: after each task adding tests, prove they RAN not skipped:
+       uv run --extra replay pytest tests/replay tests/test_cli_sim_task.py -v -rs
+  Every new test MUST show PASSED. Any SKIPPED -> STOP and report.
+
+DETERMINISM: Tasks 2 & 4 assert bit-identical reruns. No randomness/timestamps/wall-clock.
+  No ruff --fix, no pytest reruns to force green. Contradiction -> STOP.
+
+STOP-AND-REPORT FORMAT:
+  TASK: <n> / STEP: <n+title> / EXPECTED: <...> / ACTUAL: <full verbatim output>
+  Then stop and wait.
+
+COMPLETION (all of Tasks 2-6 done + every gate green):
+  1. git log --oneline -7
+  2. uv run --extra replay pytest -q
+  3. uv run --extra replay pytest tests/replay tests/test_cli_sim_task.py -rs   (prove 0 skipped)
+  4. git diff --stat 6e4e537..HEAD -- src/htdp/replay/ik.py src/htdp/replay/player.py src/htdp/replay/assets/arm.xml src/htdp/replay/so_arm100.py src/htdp/synth src/htdp/export src/htdp/ingest
+     --> MUST be EMPTY.
+  Then STOP. No PR, no push.

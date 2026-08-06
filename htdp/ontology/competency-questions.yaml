@@ -1,0 +1,47 @@
+# Competency questions for the HTDP task ontology.
+# Written BEFORE the ontology (ontology-building skill, step 1).
+# The ontology is done for an iteration when cq_check.py answers all of these.
+# Consumer: annotation of captured/synthetic demonstrations + sim/real vocabulary
+# alignment (LeRobot metadata). Pipeline infra (QC, consent, sessions) is out of
+# scope — owned by docs/schemas/*.json.
+
+questions:
+  - id: cq_task_phases
+    question: Which phases compose a given task, and in what order do they occur?
+    needs: {classes: [task, phase], relations: [has_phase, precedes]}
+    requires_instances: true
+
+  - id: cq_phase_actions
+    question: Which motor actions occur within a given phase?
+    needs: {classes: [phase, action], relations: [performs]}
+    requires_instances: true
+
+  - id: cq_phase_boundaries
+    question: Which event marker terminates a given phase (protocol ordering invariant start < grasp < release < place < stop)?
+    needs: {classes: [phase, event_marker], relations: [ends_with]}
+    requires_instances: true
+
+  - id: cq_action_object
+    question: Which manipulable object does a given action act on?
+    needs: {classes: [action, manipulable_object], relations: [acts_on]}
+    requires_instances: true
+
+  - id: cq_action_effector
+    question: Which effector (human hand, robot gripper) performs a given action?
+    needs: {classes: [action, effector], relations: [uses_effector]}
+    requires_instances: true
+
+  - id: cq_place_target
+    question: To which location does a placement action deliver its object?
+    needs: {classes: [place, location], relations: [has_target]}
+    requires_instances: true
+
+  - id: cq_sim_real_variant
+    question: Which tasks are variants of a canonical task (sim pick-and-place vs real reach-grasp-place)?
+    needs: {classes: [task], relations: [variant_of]}
+    requires_instances: true
+
+  - id: cq_failure_modes
+    question: Which failure modes can occur in which phase (for per-phase eval breakdown of failed trials)?
+    needs: {classes: [failure_mode, phase], relations: [occurs_in]}
+    requires_instances: true

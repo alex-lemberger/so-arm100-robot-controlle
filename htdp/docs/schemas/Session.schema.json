@@ -1,0 +1,66 @@
+{
+  "$defs": {
+    "ProcessingStatus": {
+      "enum": [
+        "raw",
+        "processed"
+      ],
+      "title": "ProcessingStatus",
+      "type": "string"
+    },
+    "QcStatus": {
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ],
+      "title": "QcStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "consent_form_version": {
+      "title": "Consent Form Version",
+      "type": "string"
+    },
+    "device_config_id": {
+      "title": "Device Config Id",
+      "type": "string"
+    },
+    "participant_id": {
+      "title": "Participant Id",
+      "type": "string"
+    },
+    "processing_status": {
+      "$ref": "#/$defs/ProcessingStatus",
+      "default": "raw"
+    },
+    "protocol_id": {
+      "title": "Protocol Id",
+      "type": "string"
+    },
+    "qc_status": {
+      "$ref": "#/$defs/QcStatus",
+      "default": "pass"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "start_time_s": {
+      "title": "Start Time S",
+      "type": "number"
+    }
+  },
+  "required": [
+    "session_id",
+    "participant_id",
+    "protocol_id",
+    "consent_form_version",
+    "device_config_id",
+    "start_time_s"
+  ],
+  "title": "Session",
+  "type": "object"
+}

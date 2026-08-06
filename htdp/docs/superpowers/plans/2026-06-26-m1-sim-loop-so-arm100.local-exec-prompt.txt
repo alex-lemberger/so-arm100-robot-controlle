@@ -1,0 +1,66 @@
+You are executing a pre-written implementation plan. Follow it EXACTLY. Do not design,
+redesign, improvise, optimize, refactor, or "improve" anything. If something seems wrong,
+ambiguous, or contradictory: STOP and report. Do not work around it.
+
+REPO: /Users/alexanderlemberger/human-task-dataset-pipeline
+PLAN: /Users/alexanderlemberger/human-task-dataset-pipeline/docs/superpowers/plans/2026-06-26-m1-sim-loop-so-arm100.md
+
+SETUP (run once, before Task 1):
+  1. cd /Users/alexanderlemberger/human-task-dataset-pipeline
+  2. uv sync --extra replay --extra dev
+  3. git status  --> MUST be clean. If anything is modified/staged/untracked, STOP and report.
+  4. Import smoke-check the optional deps (NOT imageio — it is added later by Task 5 Step 1):
+       uv run --extra replay python -c "import mujoco, mink, daqp; print('DEPS-OK')"
+     MUST print DEPS-OK. If any ImportError, STOP and report (do not pip/uv add anything else).
+
+EXECUTION RULES:
+  1. Read the WHOLE plan first. Execute Tasks 1->6 IN ORDER. Never skip, reorder, or merge tasks.
+  2. Execute every step literally. Write file content CHAR-FOR-CHAR as shown. No renames, no
+     refactors, no added comments, no signature changes, no reformatting.
+  3. TDD discipline: a "verify it fails" step MUST fail for the stated reason (if it passes or
+     fails for another reason, STOP). A "verify it passes" step MUST pass with 0 SKIPPED. Fix a
+     failure ONLY by the tuning notes written in that task's step. If a fix is not in the plan,
+     STOP and report.
+  4. One commit per task, using the EXACT commit message in that task's final step. No amend,
+     no squash, no extra commits, no --no-verify.
+  5. Do NOT touch any file outside the current task's "Files:" list. In particular NEVER modify:
+       src/htdp/replay/ik.py, src/htdp/replay/player.py, src/htdp/replay/assets/arm.xml,
+       src/htdp/synth/**, src/htdp/export/**, src/htdp/ingest/**, src/htdp/catalog.py,
+       src/htdp/qc/**, src/htdp/release/**, src/htdp/schemas/**
+  6. Add NO dependencies beyond what the plan's pyproject edits specify (replay extra only).
+     Use the EXACT MuJoCo/mink API shown. Do not substitute functions.
+  7. Run the FULL gate after EVERY task:
+       uv run ruff format --check . && uv run ruff check . && uv run --extra replay pytest -q && uv run mypy src
+     If ANY of these is red, STOP and report. Do not proceed to the next task on red.
+
+TASK 1 ASSET NOTE: Task 1 vendors the SO-ARM100 model by cloning mujoco_menagerie. If the
+clone has no network or the trs_so_arm100 path differs from the plan, STOP and report — do NOT
+fabricate an MJCF or substitute a different arm.
+
+FALSE-GREEN GUARD:
+  The replay tests are gated with pytest.importorskip. After each task that adds tests under
+  tests/replay/ (and tests/test_cli_sim_task.py), prove they RAN, not skipped:
+       uv run --extra replay pytest tests/replay tests/test_cli_sim_task.py -v -rs
+  Every new test MUST show PASSED. If any shows SKIPPED, STOP and report (the extra is not
+  actually active and the green is fake).
+
+DETERMINISM:
+  Tasks 2 and 4 assert bit-identical reruns (joint_trajectory / qpos_trace equal across two
+  calls; place_error/max_error under threshold). Do NOT add randomness, timestamps, or
+  wall-clock. Never use ruff --fix or pytest reruns to force green. Any contradiction between
+  two steps -> STOP and report.
+
+STOP-AND-REPORT FORMAT (when you stop, output exactly this and then WAIT):
+  TASK: <n>
+  STEP: <step number + title>
+  EXPECTED: <what the plan said should happen>
+  ACTUAL: <full command output, verbatim, including the error>
+  Then stop and wait for instructions. Do not continue.
+
+COMPLETION (only when all 6 tasks done + every gate green):
+  1. git log --oneline -6   (show the 6 new task commits, in order)
+  2. uv run --extra replay pytest -q   (paste the summary line)
+  3. uv run --extra replay pytest tests/replay tests/test_cli_sim_task.py -rs   (prove 0 skipped)
+  4. git diff --stat 654d577..HEAD -- src/htdp/replay/ik.py src/htdp/replay/player.py src/htdp/replay/assets/arm.xml src/htdp/synth src/htdp/export src/htdp/ingest
+     --> MUST be EMPTY (no-touch proof).
+  Then STOP. Do NOT open a PR, do NOT push, do NOT run git push.
