@@ -1,0 +1,24 @@
+# This file describes the configuration of your Hugging Face Space
+# For more information, see https://huggingface.co/docs/hub/spaces-config-reference
+
+# The title of your space
+title: Handwerk Robot Sim
+
+# A short description of your space (used for the hub)
+description: MuJoCo robot simulation with WebSocket bridge for neurofeedback language learning application.
+
+# The repository URL of your space
+repository: https://github.com/your-username/handwerk-robot-sim
+
+# The Docker image to use for running your space
+# This uses the Dockerfile in the root of your repository
+docker:
+  file: ./Dockerfile
+
+# The port your application will be running on (must match what you expose in your Dockerfile)
+port: 8765
+
+# Environment variables
+environment:
+  # Add any environment variables needed for your application here
+  PYTHONPATH: /app

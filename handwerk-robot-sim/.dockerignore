@@ -1,0 +1,14 @@
+# Ignore git files
+.git
+.gitignore
+.DS_Store
+
+# Ignore virtual environment
+.venv/
+
+# Ignore model files (fetched from mujoco_menagerie)
+models/
+
+# Ignore logs and temp files
+*.log
+temp/

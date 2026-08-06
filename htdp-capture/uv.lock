@@ -88,21 +88,35 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "daqp", marker = "extra == 'learn'", specifier = ">=0.5" },
     { name = "daqp", marker = "extra == 'replay'", specifier = ">=0.5" },
+    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.139.0" },
+    { name = "httpx", marker = "extra == 'serve'", specifier = ">=0.28.1" },
+    { name = "imageio", extras = ["ffmpeg"], marker = "extra == 'replay'", specifier = ">=2.34" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "mink", marker = "extra == 'learn'", specifier = ">=1.1" },
     { name = "mink", marker = "extra == 'replay'", specifier = ">=1.1" },
+    { name = "mujoco", marker = "extra == 'learn'", specifier = ">=3.1" },
     { name = "mujoco", marker = "extra == 'replay'", specifier = ">=3.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "numpy", marker = "extra == 'learn'", specifier = ">=1.26" },
+    { name = "openai-whisper", marker = "extra == 'shapesort'", specifier = ">=20231117" },
+    { name = "opencv-python-headless", marker = "extra == 'shapesort'", specifier = ">=4.9" },
+    { name = "pillow", marker = "extra == 'shapesort'", specifier = ">=10.0" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pyarrow", specifier = ">=16.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pyxdf", marker = "extra == 'ingest'", specifier = ">=1.16" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "rosbags", marker = "extra == 'rosbag'", specifier = ">=0.10" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "torch", marker = "extra == 'learn'", specifier = ">=2.2" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.51.0" },
 ]
-provides-extras = ["replay", "ingest", "rosbag", "dev"]
+provides-extras = ["replay", "learn", "ingest", "rosbag", "shapesort", "dev", "serve"]
 
 [[package]]
 name = "htdp-capture"

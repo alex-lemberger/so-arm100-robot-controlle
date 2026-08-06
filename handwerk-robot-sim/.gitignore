@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+# UR5e model is fetched via setup_model.sh, not committed
+models/ur5e/

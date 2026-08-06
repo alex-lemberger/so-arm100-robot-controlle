@@ -32,3 +32,6 @@ __pycache__/
 
 # htdp-capture
 *.xdf
+
+# handwerk-robot-sim
+/handwerk-robot-sim/models/ur5e/
