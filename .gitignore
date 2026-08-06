@@ -29,3 +29,6 @@ __pycache__/
 /htdp/data/
 /htdp/demos/
 /htdp/policy.pt
+
+# htdp-capture
+*.xdf
