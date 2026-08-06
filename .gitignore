@@ -7,11 +7,11 @@ coverage/
 .env*
 !.env.example
 
-# Downloaded datasets and local experiment outputs
-/data/external/
-/data/experiments/
-/data/local/
-/outputs/
-/.cache/
-/.venv-lerobot/
-/.worktrees/
+# so-arm100 — downloaded datasets and local experiment outputs
+/so-arm100/data/external/
+/so-arm100/data/experiments/
+/so-arm100/data/local/
+/so-arm100/outputs/
+/so-arm100/.cache/
+/so-arm100/.venv-lerobot/
+/so-arm100/.worktrees/
