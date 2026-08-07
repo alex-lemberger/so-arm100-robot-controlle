@@ -45,13 +45,30 @@ def load_image_tensor(path: Path) -> torch.Tensor:
     return torch.from_numpy(array).permute(2, 0, 1)  # CHW
 
 
-def build_observation(overview_path: Path, wrist_path: Path, state: dict, prompt: str) -> dict:
+def camera_keys(policy) -> tuple[str, str]:
+    """Derive (overview_key, wrist_key) from the checkpoint's own declared input
+    features instead of assuming camera1/camera2 — checkpoints trained with
+    --policy.input_features=null keep the dataset's native overview/wrist names,
+    while earlier checkpoints were trained against a renamed camera1/camera2
+    config. Sorted order happens to put overview before wrist and camera1
+    before camera2, so it works for both without hardcoding either scheme."""
+    visual_keys = sorted(
+        key for key, feature in policy.config.input_features.items() if feature.type.value == "VISUAL"
+    )
+    if len(visual_keys) != 2:
+        raise ValueError(f"Expected exactly 2 visual input features, got {visual_keys}")
+    return visual_keys[0], visual_keys[1]
+
+
+def build_observation(
+    overview_path: Path, wrist_path: Path, state: dict, prompt: str, overview_key: str, wrist_key: str
+) -> dict:
     state_vec = torch.tensor(
         [state[LEROBOT_TO_APP[name]] for name in LEROBOT_ORDER], dtype=torch.float32
     )
     return {
-        "observation.images.camera1": load_image_tensor(overview_path),
-        "observation.images.camera2": load_image_tensor(wrist_path),
+        overview_key: load_image_tensor(overview_path),
+        wrist_key: load_image_tensor(wrist_path),
         "observation.state": state_vec,
         "task": prompt,
     }
@@ -101,8 +118,9 @@ def main() -> None:
     preprocessor.reset()
     postprocessor.reset()
 
+    overview_key, wrist_key = camera_keys(policy)
     observation = build_observation(
-        Path(args.overview_image), Path(args.wrist_image), state, args.prompt
+        Path(args.overview_image), Path(args.wrist_image), state, args.prompt, overview_key, wrist_key
     )
 
     with torch.no_grad():
