@@ -123,3 +123,53 @@ All 6 checkpoints written: 005000, 010000, 015000, 020000, 025000, 030000.
    transfer method as the dataset) to run it against real hardware via
    `robot_learning/run_policy_prompt.py`, exactly like the 500/2000-step
    checkpoints were tested.
+
+## Re-run on the expanded 55-episode dataset (2026-08-07)
+
+The 30k-step run above never completed an actual grasp on real hardware
+(see `episode-lerobot-dataset-pipeline` project notes). Closed-loop
+debugging on the Mac traced this to a lack of training diversity right at
+the close-range pre-grasp geometry, not a bug — the fix decided on was
+recording more demonstrations, biased toward varying the piece's starting
+position/rotation, and retraining from scratch (not resumed from the
+30,000-step checkpoint).
+
+`data/local/lerobot_dataset/` on the Mac has been rebuilt from 29 → 55
+episodes (45,782 frames, 1.3 GB). **Before running the command below,
+re-copy this dataset to the Windows box** (same USB/network/cloud method as
+before) over whatever 29-episode copy is already there, and re-run the
+AppleDouble-stripping step from `windows-gpu-training-setup.md` — the file
+count and hashes changed, so the old copy is stale.
+
+Same full-run command as above, with a distinct `--output_dir`/`--job_name`
+so it doesn't overwrite the existing `smolvla_shape_sort_30000` checkpoints:
+
+```powershell
+.venv-lerobot\Scripts\lerobot-train `
+  --dataset.repo_id=local/shape_sort_teleop `
+  --dataset.root=data/local/lerobot_dataset `
+  --dataset.video_backend=pyav `
+  --dataset.eval_split=0.15 `
+  --policy.path=lerobot/smolvla_base `
+  --policy.push_to_hub=false `
+  --policy.device=cuda `
+  --policy.use_amp=false `
+  --policy.input_features=null `
+  --output_dir=outputs/train/smolvla_shape_sort_55ep_30000 `
+  --job_name=smolvla_shape_sort_55ep_30000 `
+  --wandb.enable=false `
+  --steps=30000 `
+  --save_freq=5000 `
+  --log_freq=50
+```
+
+Based on the prior run's throughput (~5.3 steps/sec on this RTX 5070),
+expect roughly the same ~2h wall time. Same smoke-test-first pattern
+applies if you want to sanity-check before committing to the full run —
+reuse the smoke-test command above, just pointed at the new
+`data/local/lerobot_dataset`.
+
+After it finishes: copy `outputs/train/smolvla_shape_sort_55ep_30000/` back
+to the Mac and run the held-out MAE eval
+(`robot_learning/eval_smolvla_held_out.py`) before any physical hardware
+test, same as the first run.
