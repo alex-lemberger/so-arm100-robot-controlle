@@ -28,6 +28,7 @@ Design: docs/superpowers/specs/2026-08-08-native-lerobot-learning-loop-design.md
 import argparse
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -334,6 +335,14 @@ def cmd_dagger(args: argparse.Namespace) -> int:
 
     Cheaper and better targeted than recording another 50 blind demonstrations.
     """
+    if args.rehearse:
+        # rehearse() imports lerobot, so it has to run under the venv python.
+        return run(
+            [bin_path("python"), str(REPO_ROOT / "robot_learning" / "dagger_ui.py"),
+             "--target", str(min(args.episodes, 3))],
+            args.dry_run,
+        )
+
     checkpoint = resolve_checkpoint(args)
     if not checkpoint.exists():
         sys.exit(f"No checkpoint at {checkpoint}")
@@ -341,19 +350,27 @@ def cmd_dagger(args: argparse.Namespace) -> int:
     # lerobot-rollout rejects any dataset whose name lacks the `rollout_`
     # prefix (rollout/context.py:356); its own examples use rollout_dagger_*.
     dataset_name = f"rollout_dagger_{args.tag}"
+    root = dataset_root(dataset_name)
+
+    # A session that saved nothing still leaves a root behind (just info.json),
+    # and LeRobotDataset.create then refuses the next attempt. Four sessions on
+    # 2026-08-09 saved nothing, so this is the common case, not the rare one.
+    if root.exists():
+        has_episodes = (root / "meta" / "episodes").exists()
+        if has_episodes:
+            sys.exit(f"{root} already holds recorded episodes. Use a different --tag.")
+        shutil.rmtree(root)
+        print(f"Cleared empty {root.name} from a previous run.")
 
     print(f"\nHuman-in-the-loop correction collection -> local/{dataset_name}")
     print(f"Policy: {checkpoint}")
-    print(f"Leader: {CONFIG['leader']['type']} on {CONFIG['leader']['port']}\n")
-    print("Keyboard, during the session:")
-    print("  space   pause/resume the policy (it holds position while paused)")
-    print("  tab     toggle correction recording -- teleoperate the recovery")
-    print("  enter   upload (corrections-only mode)")
-    print("\nPer episode: watch, pause when failure is imminent, take the leader,")
-    print("drive back to a good state, hand control back. Repeat as needed -- no")
-    print("reset is required just because you intervened.\n")
-    print("Only correction windows are recorded by default; each becomes its own")
-    print("episode. Pass --record-autonomous to keep the autonomous frames too.\n")
+    print(f"Leader: {CONFIG['leader']['type']} on {CONFIG['leader']['port']}")
+    print(f"\nThe sequence, per correction:  SPACE -> TAB -> drive -> TAB")
+    print("  SPACE  take the arm from the policy (or give it back)")
+    print("  TAB    start recording, then save -- only works after SPACE")
+    print("  ESC    finish the session")
+    print("\nTAB while the policy is driving does nothing. SPACE always comes first.")
+    print("Practise with `--rehearse` first if you want; it needs no hardware.\n")
 
     cmd = [
         bin_path("lerobot-rollout"),
@@ -381,7 +398,12 @@ def cmd_dagger(args: argparse.Namespace) -> int:
     ]
     if args.record_autonomous:
         cmd.append("--strategy.record_autonomous=true")
-    return run(cmd, args.dry_run)
+    if args.raw or args.dry_run:
+        return run(cmd, args.dry_run)
+
+    from dagger_ui import run_with_status
+    print("\n" + " \\\n  ".join(shlex.quote(part) for part in cmd) + "\n", flush=True)
+    return run_with_status(cmd, target_episodes=args.episodes)
 
 
 def cmd_merge(args: argparse.Namespace) -> int:
@@ -534,6 +556,10 @@ def main() -> None:
     p.add_argument("--execution-horizon", type=int, default=10)
     p.add_argument("--device", default="mps")
     p.add_argument("--tag", default="latest", help="names the recorded correction dataset")
+    p.add_argument("--rehearse", action="store_true",
+                   help="practise the key sequence with no robot connected")
+    p.add_argument("--raw", action="store_true",
+                   help="show LeRobot's unfiltered output instead of the status display")
     p.set_defaults(func=cmd_dagger)
 
     p = add_dry_run(sub.add_parser("merge", help="combine demonstrations and corrections into one dataset"))
