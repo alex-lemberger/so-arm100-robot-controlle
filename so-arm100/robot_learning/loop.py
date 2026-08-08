@@ -51,7 +51,17 @@ CONFIG = {
     # post-clamp value as `action`, so clamping there silently corrupts the
     # action labels whenever the leader moves quickly. While teleoperating,
     # the human hand on the leader is the safety mechanism.
-    "rollout_max_relative_target": 5.0,
+    #
+    # 25.0, not the 5.0 this started at. Measured against the 50-episode
+    # dataset, |commanded - measured| exceeds 5.0 on some joint in 52% of all
+    # training frames -- shoulder_lift alone sits at p95 12.4, p99 20.9, max
+    # 38.1, because it leads the follower while fighting gravity. A 5.0 clamp
+    # therefore truncated normal commands on every other tick, and since each
+    # tick re-clamps from a different measured position, the result was visible
+    # jitter on hardware rather than a safety margin. 25.0 clears the p99 of
+    # every joint while still bounding a runaway. For reference, lerobot-replay
+    # runs this same action column with no clamp at all.
+    "rollout_max_relative_target": 25.0,
 }
 
 # Enforced start-pose diversity. Two previous recording sessions were meant to
@@ -243,11 +253,35 @@ def cmd_eval(args: argparse.Namespace) -> int:
     print("  - hand on the power switch")
     print("  - workspace clear")
     print("  - a recorded episode has been replayed successfully on this hardware")
+    print(f"Reset window between episodes: {args.reset_time}s -- reposition the piece then.")
+    print("\nKeyboard, during the run:")
+    print("  right arrow  end the current episode (or reset phase) early")
+    print("  left arrow   discard the current episode and re-record it")
+    print("  escape       stop the session")
     print("\nScore each rollout yourself and report k/N success. That number is the")
     print("metric -- held-out MAE only ever compares checkpoints on one frozen split.\n")
 
     cmd = [
         bin_path("lerobot-rollout"),
+        # `episodic` mirrors lerobot-record: N episodes, a reset window between
+        # each, keyboard control. The default `base` strategy refuses a dataset
+        # outright ("Base strategy does not record data"), and without a
+        # recorded dataset there is nothing to review after the run.
+        "--strategy.type=episodic",
+        # Real-time chunking, not the default sync engine. Sync blocks the
+        # control loop on a full policy inference every tick, which on this Mac
+        # ran the loop at 3.3 Hz against a 30 Hz target -- each 50-action chunk
+        # (1.67s of intended motion) stretched over ~15s, so the arm crawled and
+        # looked like it was doing nothing. RTC serves the chunk from a buffer
+        # while the next one computes; measured 30 Hz with no dropped ticks.
+        f"--inference.type={args.inference}",
+        # 25, not the default 10. At 10 the engine commits only 10 actions
+        # (0.33s) before splicing in a freshly computed chunk, and inference
+        # takes ~9 ticks -- so a new chunk lands almost exactly as the old one
+        # runs out, ~3 splices/sec, each a discontinuity. Do NOT pair this with
+        # --interpolation_multiplier: 90Hz + 3x interpolation was tried on
+        # hardware 2026-08-08 and the arm stopped moving entirely.
+        f"--inference.rtc.execution_horizon={args.execution_horizon}",
         f"--robot.type={CONFIG['follower']['type']}",
         f"--robot.port={CONFIG['follower']['port']}",
         f"--robot.id={CONFIG['follower']['id']}",
@@ -260,8 +294,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
         f"--dataset.single_task={CONFIG['task']}",
         f"--dataset.num_episodes={args.episodes}",
         f"--dataset.episode_time_s={args.episode_time}",
+        f"--dataset.reset_time_s={args.reset_time}",
         "--dataset.push_to_hub=false",
     ]
+    if args.resume:
+        # --episodes is how many MORE to record this session, not the total:
+        # the episodic strategy counts from zero each run and appends.
+        cmd.append("--resume=true")
     return run(cmd, args.dry_run)
 
 
@@ -314,8 +353,18 @@ def main() -> None:
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--episode-time", type=int, default=30)
+    p.add_argument("--reset-time", type=int, default=15,
+                   help="seconds between episodes to reposition the piece")
     p.add_argument("--device", default="mps")
     p.add_argument("--tag", default="latest", help="names the recorded rollout dataset")
+    p.add_argument("--inference", default="rtc", choices=["rtc", "sync"],
+                   help="rtc keeps the control loop at 30Hz; sync drops it to ~3Hz on this machine")
+    p.add_argument("--execution-horizon", type=int, default=25,
+                   help="actions committed per chunk before RTC splices in the next one")
+    p.add_argument("--resume", action="store_true",
+                   help=("append to an existing rollout dataset (--episodes = how many more). "
+                         "Broken for local-only datasets: LeRobotDataset.resume queries the HF "
+                         "Hub for a version and 401s. Use a fresh --tag instead."))
     p.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()

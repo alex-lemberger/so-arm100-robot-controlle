@@ -195,8 +195,40 @@ def validate_episode(metadata: dict, name: str) -> None:
             raise ValueError(f"Episode {name} is missing observations.{role}")
 
 
+def motion_window(metadata: dict, threshold: float, pad_s: float) -> tuple[float, float]:
+    """Time span (seconds) in which the arm is actually moving, plus padding.
+
+    Every episode in the 2026-08-08 batch opens with the operator lining up the
+    shot -- mean 2.6s of a motionless arm -- and closes with ~2.9s of the same,
+    together a quarter of all frames. A policy trained on that learns to sit
+    still at the start pose, and because a stationary arm produces an unchanging
+    observation, it can re-predict "stay put" forever. Trimming to the moving
+    span removes the stall without touching the demonstration itself.
+    """
+    samples = metadata["timeseries"]["samples"]
+    times = np.array([s["tMs"] for s in samples], dtype=np.float64) / 1000.0
+    joints = np.array(
+        [[s["commanded"]["ticks"][str(i)] for i, _ in SERVO_TO_MOTOR] for s in samples],
+        dtype=np.float64,
+    )
+    step = np.abs(np.diff(joints, axis=0)).sum(axis=1)
+    moving = np.nonzero(step > threshold)[0]
+    if moving.size == 0:
+        return times[0], times[-1]
+    start = max(times[0], times[moving[0]] - pad_s)
+    end = min(times[-1], times[moving[-1] + 1] + pad_s)
+    return start, end
+
+
 def convert_episode(
-    dataset: LeRobotDataset, episode_dir: Path, name: str, calibration: dict, task: str
+    dataset: LeRobotDataset,
+    episode_dir: Path,
+    name: str,
+    calibration: dict,
+    task: str,
+    trim: bool = False,
+    trim_threshold: float = 8.0,
+    trim_pad_s: float = 0.3,
 ) -> tuple[int, int]:
     metadata = json.loads((episode_dir / "metadata.json").read_text())
     validate_episode(metadata, name)
@@ -205,8 +237,15 @@ def convert_episode(
     overview_frames = decode_video_frames(episode_dir / metadata["observations"]["overview"]["file"])
     wrist_frames = decode_video_frames(episode_dir / metadata["observations"]["wrist"]["file"])
 
+    if trim:
+        window_start, window_end = motion_window(metadata, trim_threshold, trim_pad_s)
+    else:
+        window_start, window_end = float("-inf"), float("inf")
+
     written = 0
     for t_sec, overview_image in overview_frames:
+        if not (window_start <= t_sec <= window_end):
+            continue
         measured_ticks = measured_track.at(t_sec)
         commanded_ticks = commanded_track.at(t_sec)
         # Drop rather than invent: a frame with no honest state or action label
@@ -250,6 +289,28 @@ def main() -> None:
     parser.add_argument("--calibration", default=str(DEFAULT_CALIBRATION))
     parser.add_argument("--task", default=DEFAULT_TASK)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--trim-stationary",
+        action="store_true",
+        help=(
+            "drop the motionless lead-in and tail of each episode. The app "
+            "recorder starts before the operator does and stops after, so a "
+            "quarter of the 2026-08-08 batch is a still arm; a policy trained "
+            "on it learns to sit at the start pose and can stall there."
+        ),
+    )
+    parser.add_argument(
+        "--trim-threshold",
+        type=float,
+        default=8.0,
+        help="total per-sample tick movement across all joints counted as motion",
+    )
+    parser.add_argument(
+        "--trim-pad",
+        type=float,
+        default=0.3,
+        help="seconds of stillness kept on either side of the moving span",
+    )
     args = parser.parse_args()
 
     calibration = load_calibration(Path(args.calibration))
@@ -275,7 +336,14 @@ def main() -> None:
     total_written = total_dropped = 0
     for name in names:
         written, dropped = convert_episode(
-            dataset, episodes_root / name, name, calibration, args.task
+            dataset,
+            episodes_root / name,
+            name,
+            calibration,
+            args.task,
+            trim=args.trim_stationary,
+            trim_threshold=args.trim_threshold,
+            trim_pad_s=args.trim_pad,
         )
         total_written += written
         total_dropped += dropped
