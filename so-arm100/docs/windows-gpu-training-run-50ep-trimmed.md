@@ -88,8 +88,8 @@ cd C:\projects\so-arm100-robot-controlle\so-arm100
   --policy.device=cuda `
   --policy.use_amp=false `
   --policy.input_features=null `
-  --output_dir=outputs/train/smolvla_circle_insert_50ep_trimmed_30000 `
-  --job_name=smolvla_circle_insert_50ep_trimmed_30000 `
+  --output_dir=outputs/train/smolvla_circle_insert_50ep_trimmed_20000 `
+  --job_name=smolvla_circle_insert_50ep_trimmed_20000 `
   --wandb.enable=false `
   --batch_size=32 `
   --steps=20000 `
