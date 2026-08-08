@@ -204,13 +204,22 @@ async function startServer() {
         } catch {
           return res.status(400).json({ error: "metadata field must be valid JSON." });
         }
+        // schemaVersion 1 carried the joint stream under `actions`; schemaVersion 2
+        // renamed it to `timeseries` and split each sample into commanded/measured.
+        // Accept either so old episodes stay re-uploadable, but require the one
+        // that matches the declared version rather than accepting any shape.
+        const timeseriesField = typeof metadata.schemaVersion === "number" && metadata.schemaVersion >= 2
+          ? "timeseries"
+          : "actions";
         if (
           typeof metadata.startedAt !== "string"
           || typeof metadata.schemaVersion !== "number"
           || !metadata.observations
-          || !metadata.actions
+          || !metadata[timeseriesField]
         ) {
-          return res.status(400).json({ error: "metadata is missing required fields (startedAt, schemaVersion, observations, actions)." });
+          return res.status(400).json({
+            error: `metadata is missing required fields (startedAt, schemaVersion, observations, ${timeseriesField}).`,
+          });
         }
 
         const sanitized = (metadata.startedAt as string).replace(/[^a-zA-Z0-9-]/g, "-");
