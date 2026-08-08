@@ -86,16 +86,32 @@ def main() -> int:
     print(f"\nDuration {duration_s:.1f}s · {total} samples · {measured_n} with telemetry\n")
 
     # --- sample rate -------------------------------------------------------
+    # The average rate conflates two very different problems: reads that are
+    # genuinely slow, and reads that time out. Separate them, because the fix
+    # differs — a healthy loop punctuated by long timeouts looks identical to a
+    # uniformly slow loop if you only look at the mean.
     hz = ts["achievedSampleRateHz"]
     target = ts["targetSampleRateHz"]
+    times = np.array([s["tMs"] for s in samples], dtype=float)
+    ok_mask = np.array([s.get("measured") is not None for s in samples])
+    gaps = np.diff(times)
+    healthy_gaps = gaps[ok_mask[:-1]] if len(gaps) else np.array([])
+    healthy_hz = 1000 / np.median(healthy_gaps) if len(healthy_gaps) else 0
+    stall_ms = float(gaps[~ok_mask[:-1]].sum()) if len(gaps) else 0.0
+
     if hz >= target * 0.9:
         check(f"sample rate {hz} Hz", OK, f"target {target} Hz")
+    elif healthy_hz >= target * 0.9:
+        check(f"sample rate {hz} Hz average", WARN,
+              f"but {healthy_hz:.1f} Hz when reads succeed — the loop is fine; "
+              f"{stall_ms / 1000:.1f}s was lost to read timeouts")
     elif hz >= 15:
         check(f"sample rate {hz} Hz", WARN,
               f"below the {target} Hz target but usable; build at fps={int(hz)}")
     else:
         failures += 1
-        check(f"sample rate {hz} Hz", BAD, "too slow — the serial reads need batching into a sync-read")
+        check(f"sample rate {hz} Hz", BAD,
+              f"only {healthy_hz:.1f} Hz even on successful reads — the reads themselves are too slow")
 
     # --- telemetry coverage ------------------------------------------------
     if measured_n == 0:

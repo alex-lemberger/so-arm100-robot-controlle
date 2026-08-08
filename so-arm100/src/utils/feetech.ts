@@ -12,6 +12,7 @@ export const FEETECH = {
     ping: 0x01,
     read: 0x02,
     write: 0x03,
+    syncRead: 0x82,
     syncWrite: 0x83,
   },
   register: {
@@ -83,6 +84,24 @@ export const buildReadPacket = (id: number, address: number, length: number) => 
 
 export const buildWritePacket = (id: number, address: number, data: number[] | Uint8Array) => (
   buildFeetechPacket(id, FEETECH.instruction.write, [address, ...data])
+);
+
+/**
+ * Creates a SYNC_READ packet asking every listed servo for the same register
+ * range in a single broadcast. Each servo still answers with its own status
+ * packet, so replies are dispatched by id exactly like individual READs — the
+ * saving is on the request side: one bus transaction instead of six.
+ *
+ * That matters because reads share a half-duplex bus with the 20 Hz motion
+ * command stream. A 2026-08-08 recording lost 17% of its samples to three
+ * clustered dropout runs; fewer transactions per sample means proportionally
+ * fewer chances to collide with a write.
+ *
+ * STS-series servos support this (protocol 0, instruction 0x82); LeRobot uses
+ * the same mechanism via GroupSyncRead. SCS-series protocol 1 does not.
+ */
+export const buildSyncReadPacket = (ids: number[], address: number, length: number) => (
+  buildFeetechPacket(FEETECH.broadcastId, FEETECH.instruction.syncRead, [address, length, ...ids])
 );
 
 /**

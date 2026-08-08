@@ -7,7 +7,7 @@ import React, { lazy, Suspense, useState, useEffect, useRef, useCallback, useMem
 import { JointState, Sequence, ConnectionType, ConnectionStatus, TelemetryData, LeaderArmState, Keyframe, ServoId } from './types';
 import { DEFAULT_JOINTS, PRESET_SEQUENCES, SO_ARM100_SERVOS } from './constants';
 import { interpolateJoints, formatSerialCommand, forwardKinematics } from './utils/kinematics';
-import { buildPingPacket, buildReadPacket, buildSyncGoalPositionPacket, bytesToHex, FEETECH_SIGN_BIT, FeetechPacket, parseFeetechPackets, readSignedWord } from './utils/feetech';
+import { buildPingPacket, buildReadPacket, buildSyncGoalPositionPacket, buildSyncReadPacket, bytesToHex, FEETECH_SIGN_BIT, FeetechPacket, parseFeetechPackets, readSignedWord } from './utils/feetech';
 import { ConnectionBar } from './components/ConnectionBar';
 import { ShieldAlert, Zap, Cpu, Sparkles, Sliders, Target, Layers, Radio, Database } from 'lucide-react';
 
@@ -23,6 +23,15 @@ const DatasetPanel = lazy(() => import('./components/DatasetPanel').then(module 
 
 const HARDWARE_COMMAND_INTERVAL_MS = 50;
 const FEETECH_REPLY_TIMEOUT_MS = 300;
+/**
+ * Reply timeout for the episode sampling loop. Deliberately far shorter than
+ * the 300 ms interactive timeout: at 1 Mbaud a reply takes well under a
+ * millisecond, and the sampler runs on a ~33 ms budget, so a 300 ms stall
+ * costs nine frames instead of one. Measured on the 2026-08-08 recording, 55
+ * timeouts at 301 ms each consumed 16.6 s of a 25.5 s take and dragged the
+ * achieved rate from 29.4 Hz down to 12.4 Hz.
+ */
+const FEETECH_SAMPLE_TIMEOUT_MS = 25;
 
 type FeetechCalibration = Record<ServoId, { minTick: number; maxTick: number; homingOffset: number }>;
 
@@ -346,8 +355,8 @@ export default function App() {
     }
   };
 
-  const queryFeetechPacket = useCallback(async (servoId: number, packet: Uint8Array) => {
-    const responsePromise = waitForFeetechResponse(servoId);
+  const queryFeetechPacket = useCallback(async (servoId: number, packet: Uint8Array, timeoutMs?: number) => {
+    const responsePromise = waitForFeetechResponse(servoId, timeoutMs);
     try {
       await sendFeetechPacket(packet, `Query servo S${servoId}`, false);
       return await responsePromise;
@@ -368,20 +377,105 @@ export default function App() {
    * this app's degrees/percent one. Returns null if any servo fails to reply,
    * so a dropped sample is recorded as a gap instead of a fabricated value.
    */
+  /**
+   * Drops buffered bytes and abandoned reply handlers. A timed-out READ can
+   * still land afterwards, which either satisfies the *next* request with
+   * stale data or leaves the RX buffer misaligned mid-packet. Either way the
+   * failure cascades: the 2026-08-08 recording lost samples in three clustered
+   * runs (longest 29 consecutive), not as isolated misses. Resetting after a
+   * bad sample keeps one failure from poisoning the ones that follow.
+   */
+  const resyncFeetechBus = useCallback(() => {
+    serialRxBufferRef.current = new Uint8Array();
+    pendingFeetechResponsesRef.current.clear();
+  }, []);
+
+  const syncReadFailuresRef = useRef(0);
+  const syncReadDisabledRef = useRef(false);
+
+  const readPresentTicksSequential = useCallback(async () => {
+    const ticks: Record<number, number> = {};
+    for (const servo of SO_ARM100_SERVOS) {
+      const response = await queryFeetechPacket(
+        servo.hardwareId,
+        buildReadPacket(servo.hardwareId, 56, 2),
+        FEETECH_SAMPLE_TIMEOUT_MS,
+      );
+      if (!response || response.parameters.length < 2) {
+        resyncFeetechBus();
+        return null;
+      }
+      ticks[servo.hardwareId] = readSignedWord(response.parameters, FEETECH_SIGN_BIT.presentPosition);
+    }
+    return ticks;
+  }, [queryFeetechPacket, resyncFeetechBus]);
+
+  const readPresentTicksSync = useCallback(async () => {
+    const ids = SO_ARM100_SERVOS.map((servo) => servo.hardwareId);
+    // Every reply handler must be registered before the broadcast goes out —
+    // all six servos answer back-to-back with no further prompting.
+    const pending = ids.map((id) => waitForFeetechResponse(id, FEETECH_SAMPLE_TIMEOUT_MS));
+    let responses: (FeetechPacket | null)[];
+    try {
+      await sendFeetechPacket(buildSyncReadPacket(ids, 56, 2), 'Sync read present position', false);
+      responses = await Promise.all(pending);
+    } catch {
+      resyncFeetechBus();
+      return null;
+    }
+
+    const ticks: Record<number, number> = {};
+    for (let index = 0; index < ids.length; index += 1) {
+      const response = responses[index];
+      if (!response || response.parameters.length < 2) {
+        resyncFeetechBus();
+        return null;
+      }
+      ticks[ids[index]] = readSignedWord(response.parameters, FEETECH_SIGN_BIT.presentPosition);
+    }
+    return ticks;
+  }, [resyncFeetechBus, sendFeetechPacket, waitForFeetechResponse]);
+
+  /**
+   * Reads the follower's *measured* encoder positions (register 56) for all six
+   * servos. READ only — no motion packet is sent, so this is safe to call while
+   * teleoperating and does not require Arm Motion to be armed.
+   *
+   * Prefers one SYNC_READ broadcast over six individual READs to cut bus
+   * contention, but falls back to sequential reads whenever sync read comes
+   * back empty, and gives up on it entirely after three consecutive failures.
+   * Sync read is unverified on this particular arm, and silently recording a
+   * session with no telemetry would be far worse than losing the speedup.
+   *
+   * Returns raw ticks alongside the decoded JointState. The raw ticks are the
+   * point: they are the calibration-independent encoder truth, so a dataset
+   * built from them can be expressed in LeRobot's own convention rather than
+   * this app's degrees/percent one. Returns null if the read fails, so a
+   * dropped sample is recorded as a gap instead of a fabricated value.
+   */
   const readMeasuredFollowerState = useCallback(async () => {
     if (!portWriterRef.current || connectionType !== 'webserial' || !feetechCalibration) return null;
 
-    const ticks: Record<number, number> = {};
-    for (const servo of SO_ARM100_SERVOS) {
-      const response = await queryFeetechPacket(servo.hardwareId, buildReadPacket(servo.hardwareId, 56, 2));
-      if (!response || response.parameters.length < 2) return null;
-      ticks[servo.hardwareId] = readSignedWord(response.parameters, FEETECH_SIGN_BIT.presentPosition);
+    let ticks: Record<number, number> | null = null;
+    if (!syncReadDisabledRef.current) {
+      ticks = await readPresentTicksSync();
+      if (ticks) {
+        syncReadFailuresRef.current = 0;
+      } else {
+        syncReadFailuresRef.current += 1;
+        if (syncReadFailuresRef.current >= 3) {
+          syncReadDisabledRef.current = true;
+          logMessage('Sync read failed three times; falling back to sequential servo reads for this session.', 'warn');
+        }
+      }
     }
+    if (!ticks) ticks = await readPresentTicksSequential();
+    if (!ticks) return null;
 
     const measuredJoints = calibratedTicksToJoints(ticks, feetechCalibration);
     if (!measuredJoints) return null;
     return { ticks, joints: measuredJoints };
-  }, [connectionType, feetechCalibration, queryFeetechPacket]);
+  }, [connectionType, feetechCalibration, logMessage, readPresentTicksSequential, readPresentTicksSync]);
 
   /**
    * The tick values the app would write for a given commanded JointState —
