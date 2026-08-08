@@ -82,12 +82,46 @@ Repeat within the episode as often as needed.
 By default only the correction windows are recorded, each as its own episode.
 `--record-autonomous` keeps the autonomous frames too.
 
-Then fine-tune on demonstrations plus corrections and repeat against the new
-failure modes:
+## Merging demonstrations and corrections
+
+Corrections land in their own dataset (`local/dagger_<tag>`), and `lerobot-train`
+takes exactly one: `DatasetConfig.repo_id` is a plain `str`, and
+`datasets/factory.py` raises `NotImplementedError("The MultiLeRobotDataset
+isn't supported for now.")`. So the two have to be merged on disk before the
+fine-tune can see both — which is what `hil_data_collection.mdx` prescribes:
+fine-tune on the **combined** dataset.
+
+```bash
+python robot_learning/loop.py merge \
+  --into circle_insert_dagger_v1 \
+  circle_insert_50ep_trimmed dagger_v1
+```
+
+This wraps LeRobot's own `aggregate_datasets`. Don't hand-roll it: in the v3.0
+layout an episode is not a file — many episodes share one parquet shard and one
+mp4, and `meta/episodes/*.parquet` locates each by row range and by video time
+window. Merging re-indexes every episode, shifts every video timestamp by the
+accumulated duration, re-packs shards, unifies the task table and recomputes
+aggregate stats.
+
+Sources must agree on `fps`, `robot_type` and `features` or `validate_all_metadata`
+raises. Datasets from `lerobot-record` and from `lerobot-rollout` (what `dagger`
+runs) do agree — both are `so_follower` / 30 fps / the same 2-camera feature set.
+
+Verified 2026-08-09 by merging `circle_insert_50ep_trimmed` (50 ep) with
+`rollout_trimmed_b32` (10 ep): 60 episodes / 34,645 frames out, contiguous
+episode indices and row ranges, and sampled frames from both sources decode
+bit-identical to the originals — including across the video-file boundary at
+episode 50, which is where a timestamp-shift bug would show.
+
+Then fine-tune on the merged dataset and repeat against the new failure modes:
 
 ```
-Policy v0 (demos) → DAgger → fine-tune → v1 → DAgger → fine-tune → v2 → ...
+Policy v0 (demos) → DAgger → merge → fine-tune → v1 → DAgger → … 
 ```
+
+Expect the corrections to be a small fraction of the total frames. That is the
+point — they are on-policy states the demonstrations never visit, not bulk.
 
 Requirements, both already satisfied here: a teleoperator with active motors
 (the `so100_leader` in `CONFIG`, since DAgger mirrors the follower's pose onto
@@ -98,7 +132,7 @@ passes by default.
 
 | situation | do this | not this |
 |---|---|---|
-| Policy fails in specific, repeatable ways | `loop.py dagger`, then fine-tune | record 50 fresh episodes |
+| Policy fails in specific, repeatable ways | `loop.py dagger`, `merge`, fine-tune | record 50 fresh episodes |
 | Iterating on the same task | `train --lora` | full fine-tune |
 | Task itself changes (new shape, new prompt) | record new demonstrations | DAgger |
 | Base model feels wrong | it probably isn't | swapping to pi05/groot |

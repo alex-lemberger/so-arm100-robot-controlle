@@ -335,6 +335,25 @@ def cmd_dagger(args: argparse.Namespace) -> int:
     return run(cmd, args.dry_run)
 
 
+def cmd_merge(args: argparse.Namespace) -> int:
+    """Combine demonstrations and DAgger corrections into one trainable dataset.
+
+    `lerobot-train` takes exactly one dataset -- MultiLeRobotDataset raises
+    NotImplementedError in this version -- so demos and corrections, which land
+    in separate datasets, have to be merged on disk first. This runs LeRobot's
+    own `aggregate_datasets`; see robot_learning/merge_datasets.py for why that
+    is not a file copy in the v3.0 layout.
+    """
+    print(f"\nMerging {', '.join(args.sources)} -> local/{args.into}")
+    print("Corrections are a small fraction of the demo frames; that is expected --")
+    print("they are on-policy states the demonstrations never visit.\n")
+    return run(
+        [bin_path("python"), str(REPO_ROOT / "robot_learning" / "merge_datasets.py"),
+         "--into", args.into, *args.sources],
+        args.dry_run,
+    )
+
+
 def cmd_eval(args: argparse.Namespace) -> int:
     checkpoint = Path(args.checkpoint)
     if not checkpoint.exists():
@@ -468,6 +487,11 @@ def main() -> None:
     p.add_argument("--device", default="mps")
     p.add_argument("--tag", default="latest", help="names the recorded correction dataset")
     p.set_defaults(func=cmd_dagger)
+
+    p = add_dry_run(sub.add_parser("merge", help="combine demonstrations and corrections into one dataset"))
+    p.add_argument("sources", nargs="+", help="dataset names under data/local/datasets")
+    p.add_argument("--into", required=True, help="name of the merged dataset to write")
+    p.set_defaults(func=cmd_merge)
 
     p = add_dry_run(sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware"))
     p.add_argument("--checkpoint", required=True)
