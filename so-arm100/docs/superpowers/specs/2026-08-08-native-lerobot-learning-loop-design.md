@@ -102,6 +102,19 @@ keyboard re-record of a bad episode mid-session and a built-in per-episode reset
 
 Camera keys stay `overview` / `wrist`, consistent with existing project naming.
 
+Two rules learned during step 0:
+
+- **Never pass `--robot.max_relative_target` to `lerobot-record`.** The clamp is applied
+  relative to the follower's current position and `lerobot-record` logs the **post-clamp**
+  value as `action`, so it silently corrupts action labels whenever the leader moves
+  quickly. It belongs on `lerobot-rollout` only; while teleoperating, the hand on the
+  leader is the safety mechanism.
+- **Recording is run by the human, in their own terminal, not through an agent.** It is
+  interactive and human-paced: the operator needs the live `Recording episode N` cue and
+  the keyboard controls for re-recording a bad take. Two throwaway takes driven by an
+  agent produced 1,499 frames of a motionless arm purely because the operator could not
+  see when the window was open.
+
 ### 2. Recording protocol
 
 Diversity has now failed twice when left to intent — the 26-episode batch of 2026-08-07
@@ -187,16 +200,41 @@ The 55-episode dataset and every existing checkpoint are archived, not deleted.
   checkpoints trained on the new data will not feed Sequence Studio without a conversion
   that this spec does not build.
 
+## Tooling
+
+`robot_learning/loop.py` wraps the three stages so a cycle is three short commands rather
+than hand-assembled 15-flag lines. All hardware ids, ports, camera indices and conventions
+live in one `CONFIG`. It builds and execs LeRobot's own CLIs and prints each command first,
+so anything it does can be run by hand; `--dry-run` prints without executing.
+
+```
+python robot_learning/loop.py record --episodes 50           # full task, prints the pose grid
+python robot_learning/loop.py record --episodes 30 --grasp-only
+python robot_learning/loop.py train  --steps 40000           # ACT on MPS
+python robot_learning/loop.py eval   --checkpoint <path> --episodes 10
+```
+
+`robot_learning/probe_native_hardware.py` is the read-only pre-flight check: it connects to
+the follower and both cameras and reads one observation without ever sending an action.
+
 ## Sequencing
 
-**Step 0 — hardware go/no-go (~30 min).** Must pass before committing to a recording
-session:
+**Step 0 — hardware go/no-go.** Results, 2026-08-08:
 
-1. Read-only observation probe: connect to the follower, `get_observation()`, confirm
-   joint readings and both camera frames arrive. No motion.
-2. `lerobot-teleoperate` with both cameras displayed.
-3. `lerobot-record` two throwaway episodes.
-4. `lerobot-replay` one of them back.
+1. **PASS** — read-only observation probe: follower reachable, both cameras returning
+   `(720, 1280, 3)`, real encoder readings.
+2. **PASS** — `lerobot-teleoperate` mirrored leader to follower, clean 30 Hz for 20 s, no
+   faults, torque released cleanly on disconnect.
+3. **PARTIAL** — `lerobot-record` plumbing proven (600 and 899 frames, correct feature
+   schema, two 1280×720 mp4s, `robot_type=so_follower`), but both takes captured a
+   motionless arm; see the second rule above. Needs one operator-driven take with real
+   motion.
+   - **Defect 1 confirmed fixed**: commanded vs. measured elbow held a constant ~5–6 unit
+     gap (steady-state droop under gravity). Under the old pipeline that number is 0 by
+     construction, because state *was* the command. The state channel is genuinely the
+     encoders.
+   - Still unverified: that state and action diverge *dynamically* under motion.
+4. **NOT RUN** — `lerobot-replay` one recorded episode back.
 
 **Step 1** — record 50 full-task episodes on the position grid.
 **Step 2** — record ~30 grasp-only episodes.
