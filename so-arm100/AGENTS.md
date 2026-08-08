@@ -65,6 +65,17 @@ This repository contains a Vite + React + TypeScript interface for controlling a
 - **The tick→LeRobot-units conversion was verified equivalent to `MotorsBus._normalize`** over 2,000 random tick vectors (max difference 7.5e-6, i.e. float32 rounding). If you change `normalize_ticks`, re-run that equivalence check — a silent mismatch here would corrupt every subsequent checkpoint with no visible error. Body joints use `DEGREES`, the gripper uses `RANGE_0_100`, per `so_follower.py:50-59` with `use_degrees=True`.
 - The v1 builder (`build_lerobot_dataset.py`) is kept only for rebuilding the archived 29/55-episode datasets. Do not use it for new recordings.
 
+## Follow the LeRobot docs before inventing a workflow (2026-08-08)
+
+`/Users/alexanderlemberger/lerobot/docs/source/` is version-matched to the installed lerobot and is the first thing to read. A session spent diagnosing rollout problems on real hardware rediscovered, by experiment, things that `rtc.mdx`, `smolvla.mdx` and `async.mdx` already state. Specific corrections that came out of finally reading them:
+
+- **`--batch_size=48` (or 32), not the default.** `lerobot-train` defaults to `batch_size=8` (`configs/train.py:101`) and every checkpoint this project produced before 2026-08-08 silently used it. The SmolVLA guide uses **64**. The 30k run peaked at 3.06 GB of the 5070's 12 GB — the card was three-quarters idle, at 1/8 the recommended batch. Suspect this first for a noisy/jerky policy.
+- **Start-pose diversity should be discrete and repeated, not continuous scatter.** The SmolVLA doc: *"we recorded 50 episodes across 5 distinct cube positions. For each position, we collected 10 episodes… This structure, repeating each variation several times, helped the model generalize better. We tried similar dataset with 25 episodes, and it was not enough."* This is what `loop.py grid` exists to enforce — do not talk yourself out of it. The 2026-08-08 batch of 50 has continuous hand-placed scatter (~190 × 110 px) with no grid structure, which is **not** what the authors recommend.
+- **RTC: `execution_horizon=10`, `max_guidance_weight=10.0`.** `rtc.mdx` gives "typical values: 8-12" and warns higher means less reactivity; 10.0 guidance is documented as optimal for 10-step flow matching. Do not pair with `--interpolation_multiplier` — 90 Hz plus 3x interpolation was tried on hardware and the arm stopped moving entirely.
+- **Test RTC offline first.** `examples/rtc/eval_dataset.py` visualizes chunk blending against dataset samples; `rtc.mdx` says to do this *before* running on a real robot. Use it instead of arm time.
+- **Record new data at 640×480** — every official example uses it. But **evaluate a checkpoint at whatever resolution it was trained on**: the existing checkpoints expect 1280×720 (16:9) and pad to 512², so feeding 4:3 frames at rollout time shifts the input distribution. Check `config.json`'s `input_features` before changing camera config.
+- Async inference (`async.mdx`, a `PolicyServer` + `RobotClient` pair) is a *different* mechanism from RTC; the docs recommend using both together. Only RTC is wired up here so far.
+
 ## Code conventions
 
 - Keep components in `src/components/` and shared types in `src/types.ts`.

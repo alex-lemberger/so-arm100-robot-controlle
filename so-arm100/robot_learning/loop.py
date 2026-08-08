@@ -275,12 +275,15 @@ def cmd_eval(args: argparse.Namespace) -> int:
         # looked like it was doing nothing. RTC serves the chunk from a buffer
         # while the next one computes; measured 30 Hz with no dropped ticks.
         f"--inference.type={args.inference}",
-        # 25, not the default 10. At 10 the engine commits only 10 actions
-        # (0.33s) before splicing in a freshly computed chunk, and inference
-        # takes ~9 ticks -- so a new chunk lands almost exactly as the old one
-        # runs out, ~3 splices/sec, each a discontinuity. Do NOT pair this with
-        # --interpolation_multiplier: 90Hz + 3x interpolation was tried on
-        # hardware 2026-08-08 and the arm stopped moving entirely.
+        # 10 is the documented value: docs/source/rtc.mdx gives "typical values
+        # 8-12" and warns that higher means smoother transitions but LESS
+        # reactivity; both the RTC and SmolVLA docs use 10 alongside
+        # max_guidance_weight=10.0 (optimal for 10-step flow matching). This was
+        # briefly set to 25 on 2026-08-08 by reasoning rather than by reading,
+        # before the residual jitter was traced to the policy itself rather than
+        # to chunk splicing. Do NOT pair with --interpolation_multiplier: 90Hz
+        # plus 3x interpolation was tried on hardware and the arm stopped
+        # moving entirely.
         f"--inference.rtc.execution_horizon={args.execution_horizon}",
         f"--robot.type={CONFIG['follower']['type']}",
         f"--robot.port={CONFIG['follower']['port']}",
@@ -359,8 +362,8 @@ def main() -> None:
     p.add_argument("--tag", default="latest", help="names the recorded rollout dataset")
     p.add_argument("--inference", default="rtc", choices=["rtc", "sync"],
                    help="rtc keeps the control loop at 30Hz; sync drops it to ~3Hz on this machine")
-    p.add_argument("--execution-horizon", type=int, default=25,
-                   help="actions committed per chunk before RTC splices in the next one")
+    p.add_argument("--execution-horizon", type=int, default=10,
+                   help="actions committed per chunk before RTC splices in the next one (docs: 8-12)")
     p.add_argument("--resume", action="store_true",
                    help=("append to an existing rollout dataset (--episodes = how many more). "
                          "Broken for local-only datasets: LeRobotDataset.resume queries the HF "

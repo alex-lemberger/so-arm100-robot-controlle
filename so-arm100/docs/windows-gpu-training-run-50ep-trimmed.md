@@ -91,14 +91,30 @@ cd C:\projects\so-arm100-robot-controlle\so-arm100
   --output_dir=outputs/train/smolvla_circle_insert_50ep_trimmed_30000 `
   --job_name=smolvla_circle_insert_50ep_trimmed_30000 `
   --wandb.enable=false `
+  --batch_size=48 `
   --steps=30000 `
   --save_freq=5000 `
   --log_freq=50
 ```
 
+**`--batch_size=48` is the most important change in this run, more than the
+trimming.** `lerobot-train` defaults to `batch_size=8` (`configs/train.py:101`)
+and none of the previous runs overrode it, so every checkpoint this project has
+produced was trained at 8. The official SmolVLA guide uses **64** and says to
+"start with a small batch size and increase it incrementally, if the GPU allows
+it". The untrimmed 30k run peaked at **3.06 GB of the 5070's 12 GB** -- the card
+was three-quarters idle. Community reports put batch 44 at ~11.5 GB, so 48 is
+near the ceiling; **drop to 32 if it OOMs**, which is still 4x what we ran.
+
+An 8x smaller batch than recommended means correspondingly noisier gradients,
+which is a standard cause of the noisy action distribution measured on the
+untrimmed checkpoint. Test this before doing any further surgery on the data.
+
 For the smoke test, change `--steps=10 --save_freq=10 --log_freq=1` and use
-a `_smoke` suffix on `--output_dir`/`--job_name`. Expect ~2 hours at ~5.3
-steps/sec for the full run, ~3 GB of 12 GB VRAM.
+a `_smoke` suffix on `--output_dir`/`--job_name`. The smoke test is also where
+a batch-size OOM will show up -- catch it in 10 steps, not 2 hours in. Expect
+~2 hours for the full run; at batch 48 the step rate will be lower than the
+~5.3/sec measured at batch 8, but each step sees 6x the data.
 
 **Save the console output this time.** The previous run's log never made it
 back to the Mac, so there is no loss curve to compare against. Pipe it:
@@ -115,9 +131,11 @@ three fixes by default:
   a 30 Hz target**. Each 50-action chunk (1.67 s of intended motion)
   stretched over ~15 s, so the arm crawled and looked like it was doing
   nothing at all.
-- `--inference.rtc.execution_horizon=25` — at the default 10, a new chunk
-  is spliced in every 0.33 s while inference takes ~9 ticks, so chunks
-  arrive just as the previous runs out: ~3 discontinuities per second.
+- `--inference.rtc.execution_horizon=10` with `max_guidance_weight=10.0` —
+  the values both `docs/source/rtc.mdx` and `docs/source/smolvla.mdx` use.
+  The RTC doc gives "typical values: 8-12" and warns that higher means
+  smoother transitions but *less reactivity*. 10.0 guidance weight is
+  documented as optimal for 10-step flow matching, which SmolVLA is.
 - `max_relative_target=25.0`, was 5.0 — 52% of training frames have some
   joint commanded more than 5.0 ahead of measured position (shoulder_lift
   p95 12.4, p99 20.9, max 38.1, since it leads the follower against
