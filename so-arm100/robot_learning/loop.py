@@ -338,7 +338,11 @@ def cmd_dagger(args: argparse.Namespace) -> int:
     if not checkpoint.exists():
         sys.exit(f"No checkpoint at {checkpoint}")
 
-    print(f"\nHuman-in-the-loop correction collection -> local/dagger_{args.tag}")
+    # lerobot-rollout rejects any dataset whose name lacks the `rollout_`
+    # prefix (rollout/context.py:356); its own examples use rollout_dagger_*.
+    dataset_name = f"rollout_dagger_{args.tag}"
+
+    print(f"\nHuman-in-the-loop correction collection -> local/{dataset_name}")
     print(f"Policy: {checkpoint}")
     print(f"Leader: {CONFIG['leader']['type']} on {CONFIG['leader']['port']}\n")
     print("Keyboard, during the session:")
@@ -368,8 +372,8 @@ def cmd_dagger(args: argparse.Namespace) -> int:
         f"--teleop.id={CONFIG['leader']['id']}",
         f"--policy.path={checkpoint}",
         f"--policy.device={args.device}",
-        f"--dataset.repo_id=local/dagger_{args.tag}",
-        f"--dataset.root={dataset_root('dagger_' + args.tag)}",
+        f"--dataset.repo_id=local/{dataset_name}",
+        f"--dataset.root={dataset_root(dataset_name)}",
         f"--dataset.single_task={CONFIG['task']}",
         f"--dataset.num_episodes={args.episodes}",
         f"--dataset.episode_time_s={args.episode_time}",
