@@ -357,6 +357,45 @@ export default function App() {
     }
   }, [sendFeetechPacket, waitForFeetechResponse]);
 
+  /**
+   * Reads the follower's *measured* encoder positions (register 56) for all six
+   * servos. READ only — no motion packet is sent, so this is safe to call while
+   * teleoperating and does not require Arm Motion to be armed.
+   *
+   * Returns raw ticks alongside the decoded JointState. The raw ticks are the
+   * point: they are the calibration-independent encoder truth, so a dataset
+   * built from them can be expressed in LeRobot's own convention rather than
+   * this app's degrees/percent one. Returns null if any servo fails to reply,
+   * so a dropped sample is recorded as a gap instead of a fabricated value.
+   */
+  const readMeasuredFollowerState = useCallback(async () => {
+    if (!portWriterRef.current || connectionType !== 'webserial' || !feetechCalibration) return null;
+
+    const ticks: Record<number, number> = {};
+    for (const servo of SO_ARM100_SERVOS) {
+      const response = await queryFeetechPacket(servo.hardwareId, buildReadPacket(servo.hardwareId, 56, 2));
+      if (!response || response.parameters.length < 2) return null;
+      ticks[servo.hardwareId] = readSignedWord(response.parameters, FEETECH_SIGN_BIT.presentPosition);
+    }
+
+    const measuredJoints = calibratedTicksToJoints(ticks, feetechCalibration);
+    if (!measuredJoints) return null;
+    return { ticks, joints: measuredJoints };
+  }, [connectionType, feetechCalibration, queryFeetechPacket]);
+
+  /**
+   * The tick values the app would write for a given commanded JointState —
+   * exactly what `queueHardwareMotion` puts on the bus. Recorded alongside the
+   * measured ticks so the action channel is in the same units as the state
+   * channel.
+   */
+  const commandedJointsToTicks = useCallback((commanded: JointState) => {
+    if (!feetechCalibration) return null;
+    return Object.fromEntries(
+      jointsToCalibratedTicks(commanded, feetechCalibration).map(({ id, position }) => [id, position]),
+    ) as Record<number, number>;
+  }, [feetechCalibration]);
+
   // This sends only PING and READ requests; neither command asks a servo to move.
   const handleVerifyFeetechBus = useCallback(async () => {
     if (!portWriterRef.current || connectionType !== 'webserial') {
@@ -783,6 +822,8 @@ export default function App() {
                   disabled={isPlaying}
                   enableGamepadControl={false}
                   showGamepadStatus={false}
+                  readMeasuredFollowerState={readMeasuredFollowerState}
+                  commandedJointsToTicks={commandedJointsToTicks}
                 />
               </Suspense>
             </div>
@@ -831,6 +872,8 @@ export default function App() {
                 joints={joints}
                 onJointChange={handleJointChange}
                 disabled={isPlaying}
+                readMeasuredFollowerState={readMeasuredFollowerState}
+                commandedJointsToTicks={commandedJointsToTicks}
               />
             </Suspense>
           )}

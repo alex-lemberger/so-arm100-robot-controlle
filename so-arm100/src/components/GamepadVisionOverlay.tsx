@@ -8,21 +8,39 @@ type CameraSelections = Partial<Record<CameraRole, string>>;
 
 const isTrainingCamera = (device: MediaDeviceInfo) => !/(facetime|(?:qbs|obs) virtual camera)/i.test(device.label);
 
-interface CommandedJointSample {
+/**
+ * One recorded timestep. `commanded` is the UI/leader target the app puts on
+ * the bus; `measured` is what the follower's encoders actually report. Keeping
+ * both is the whole point of schemaVersion 2 — schemaVersion 1 had only the
+ * command, so the dataset builder had to fake observation.state from the
+ * previous action, and the policy never saw a real state distribution.
+ *
+ * `measured` is null when a servo read timed out. A gap is recorded honestly
+ * rather than back-filled, so the builder can drop the frame instead of
+ * training on an invented observation.
+ */
+interface EpisodeSample {
   tMs: number;
-  joints: JointState;
+  commanded: { joints: JointState; ticks: Record<number, number> | null };
+  measured: { joints: JointState; ticks: Record<number, number> } | null;
 }
 
 interface RecordingSession {
   startedAtIso: string;
   startedAtPerformanceMs: number;
-  samples: CommandedJointSample[];
+  samples: EpisodeSample[];
   recorders: Record<CameraRole, MediaRecorder>;
   chunks: Record<CameraRole, Blob[]>;
   cameraSettings: Record<CameraRole, MediaTrackSettings>;
-  sampleTimerId: number;
+  sampleLoopActive: boolean;
+  droppedSamples: number;
   elapsedTimerId: number;
 }
+
+/** Target sampling rate. The loop is self-scheduling and never overlaps, so
+ *  the achieved rate is whatever the serial bus sustains — it is measured and
+ *  written into the metadata rather than assumed. */
+const TARGET_SAMPLE_HZ = 30;
 
 interface GamepadVisionOverlayProps {
   joints: JointState;
@@ -30,6 +48,10 @@ interface GamepadVisionOverlayProps {
   disabled?: boolean;
   enableGamepadControl?: boolean;
   showGamepadStatus?: boolean;
+  /** Reads measured follower encoder positions. READ-only, no motion. */
+  readMeasuredFollowerState?: () => Promise<{ ticks: Record<number, number>; joints: JointState } | null>;
+  /** Converts a commanded JointState to the ticks the app would write. */
+  commandedJointsToTicks?: (commanded: JointState) => Record<number, number> | null;
 }
 
 export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
@@ -37,7 +59,9 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   onJointChange,
   disabled = false,
   enableGamepadControl = true,
-  showGamepadStatus = true
+  showGamepadStatus = true,
+  readMeasuredFollowerState,
+  commandedJointsToTicks
 }) => {
   const [gamepadState, setGamepadState] = useState<GamepadMapping | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
@@ -46,6 +70,9 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isRecordingEpisode, setIsRecordingEpisode] = useState(false);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  // Live sample health, so a bus problem is visible during the take instead of
+  // at dataset-build time.
+  const [sampleHealth, setSampleHealth] = useState<{ total: number; measured: number; hz: number } | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const overviewVideoRef = useRef<HTMLVideoElement>(null);
@@ -55,10 +82,20 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
   const jointsRef = useRef(joints);
   const onJointChangeRef = useRef(onJointChange);
   const disabledRef = useRef(disabled);
+  const readMeasuredRef = useRef(readMeasuredFollowerState);
+  const commandedToTicksRef = useRef(commandedJointsToTicks);
 
   useEffect(() => {
     jointsRef.current = joints;
   }, [joints]);
+
+  useEffect(() => {
+    readMeasuredRef.current = readMeasuredFollowerState;
+  }, [readMeasuredFollowerState]);
+
+  useEffect(() => {
+    commandedToTicksRef.current = commandedJointsToTicks;
+  }, [commandedJointsToTicks]);
 
   useEffect(() => {
     onJointChangeRef.current = onJointChange;
@@ -186,11 +223,12 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
     const session = recordingSessionRef.current;
     if (!session) return;
 
+    session.sampleLoopActive = false;
     recordingSessionRef.current = null;
-    window.clearInterval(session.sampleTimerId);
     window.clearInterval(session.elapsedTimerId);
     setIsRecordingEpisode(false);
     setRecordingElapsedSeconds(0);
+    setSampleHealth(null);
     setSaveStatus('saving');
     setSaveMessage('Saving episode to the server…');
 
@@ -211,21 +249,36 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       return { role, mimeType, extension, blob: new Blob(session.chunks[role], { type: mimeType }) };
     });
 
+    const durationMs = Math.round(performance.now() - session.startedAtPerformanceMs);
+    const measuredCount = session.samples.filter((sample) => sample.measured !== null).length;
+    // The rate the bus actually sustained, from real timestamps. Never assumed:
+    // the builder resamples against video time using tMs, so a fabricated
+    // nominal rate would silently reintroduce the staircase that schemaVersion 1
+    // baked in.
+    const achievedSampleRateHz = session.samples.length > 1 && durationMs > 0
+      ? Number(((session.samples.length - 1) / (durationMs / 1_000)).toFixed(2))
+      : 0;
+
     const metadata = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       startedAt: session.startedAtIso,
-      durationMs: Math.round(performance.now() - session.startedAtPerformanceMs),
+      durationMs,
       observations: {
         overview: { file: `overview.${videoBlobs[0].extension}`, settings: session.cameraSettings.overview },
         wrist: { file: `wrist.${videoBlobs[1].extension}`, settings: session.cameraSettings.wrist }
       },
-      actions: {
-        type: 'commanded_joint_target',
+      timeseries: {
         unit: { base: 'degrees', shoulder: 'degrees', elbow: 'degrees', wristPitch: 'degrees', wristRoll: 'degrees', gripper: 'percent' },
-        sampleRateHz: 20,
+        targetSampleRateHz: TARGET_SAMPLE_HZ,
+        achievedSampleRateHz,
+        sampleCount: session.samples.length,
+        measuredSampleCount: measuredCount,
+        droppedSamples: session.droppedSamples,
         samples: session.samples
       },
-      note: 'Joint samples are commanded UI targets, not measured follower-arm position telemetry.'
+      note: measuredCount === 0
+        ? 'WARNING: no measured follower telemetry was captured (WebSerial not connected, or calibration missing). This episode has commanded targets only and is NOT usable for training.'
+        : 'commanded = target written to the bus (action). measured = follower encoder readings (observation.state). Ticks are raw servo units; joints are this app\'s degrees/percent convention.'
     };
 
     // Browser download is the fallback path now, not the primary one — used
@@ -380,6 +433,17 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       setCameraError('This browser does not support video recording. Use a current Chrome or Edge browser.');
       return;
     }
+    // Without measured follower telemetry the episode has no real
+    // observation.state and cannot be trained on. Two previous sessions lost a
+    // whole batch to a defect nobody saw until dataset-build time, so this
+    // fails loudly up front rather than quietly producing unusable data.
+    if (!readMeasuredFollowerState && !window.confirm(
+      'No measured follower telemetry is available (connect WebSerial and verify the servo bus first).\n\n'
+      + 'This episode would record commanded targets only, which is NOT usable for training.\n\n'
+      + 'Record anyway?'
+    )) {
+      return;
+    }
 
     try {
       const preferredMimeType = ['video/webm;codecs=vp9', 'video/webm', 'video/mp4']
@@ -399,28 +463,62 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
       const session: RecordingSession = {
         startedAtIso: new Date().toISOString(),
         startedAtPerformanceMs,
-        samples: [{ tMs: 0, joints: { ...jointsRef.current } }],
+        samples: [],
         recorders,
         chunks,
         cameraSettings: {
           overview: overview.getVideoTracks()[0]?.getSettings() ?? {},
           wrist: wrist.getVideoTracks()[0]?.getSettings() ?? {}
         },
-        sampleTimerId: window.setInterval(() => {
-          const current = recordingSessionRef.current;
-          if (!current) return;
-          current.samples.push({
-            tMs: Math.round(performance.now() - current.startedAtPerformanceMs),
-            joints: { ...jointsRef.current }
-          });
-        }, 50),
+        sampleLoopActive: true,
+        droppedSamples: 0,
         elapsedTimerId: window.setInterval(() => {
           const current = recordingSessionRef.current;
-          if (current) setRecordingElapsedSeconds(Math.floor((performance.now() - current.startedAtPerformanceMs) / 1_000));
+          if (!current) return;
+          const elapsedMs = performance.now() - current.startedAtPerformanceMs;
+          setRecordingElapsedSeconds(Math.floor(elapsedMs / 1_000));
+          setSampleHealth({
+            total: current.samples.length,
+            measured: current.samples.length - current.droppedSamples,
+            hz: elapsedMs > 0 ? Math.round((current.samples.length / (elapsedMs / 1_000)) * 10) / 10 : 0
+          });
         }, 250)
       };
 
       recordingSessionRef.current = session;
+
+      /**
+       * Self-scheduling sample loop. A setInterval would stack up overlapping
+       * serial reads whenever the bus is slower than the interval; this waits
+       * for each read to finish, so the achieved rate degrades gracefully
+       * instead of corrupting the transport. Every sample carries its real
+       * timestamp, so a slow bus produces honest sparse timing rather than a
+       * fabricated fixed-rate grid.
+       */
+      const sampleLoop = async () => {
+        while (true) {
+          const current = recordingSessionRef.current;
+          if (!current || !current.sampleLoopActive) return;
+
+          const tickStart = performance.now();
+          const commandedJoints = { ...jointsRef.current };
+          const measured = readMeasuredRef.current ? await readMeasuredRef.current() : null;
+          if (!measured) current.droppedSamples += 1;
+
+          current.samples.push({
+            tMs: Math.round(tickStart - current.startedAtPerformanceMs),
+            commanded: {
+              joints: commandedJoints,
+              ticks: commandedToTicksRef.current?.(commandedJoints) ?? null
+            },
+            measured
+          });
+
+          const remaining = 1_000 / TARGET_SAMPLE_HZ - (performance.now() - tickStart);
+          if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
+        }
+      };
+      void sampleLoop();
       recorders.overview.start(1_000);
       recorders.wrist.start(1_000);
       setCameraError(null);
@@ -573,6 +671,20 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
           <div className="flex items-center gap-2">
             <span className="text-xs font-black uppercase tracking-wider text-zinc-100">Demonstration Recorder</span>
             {isRecordingEpisode && <span className="bg-rose-500/15 px-2 py-0.5 text-[10px] font-mono font-bold text-rose-300">REC {recordingElapsedSeconds}s</span>}
+            {isRecordingEpisode && sampleHealth && (
+              <span
+                className={`px-2 py-0.5 text-[10px] font-mono font-bold ${
+                  sampleHealth.measured === 0
+                    ? 'bg-rose-500/15 text-rose-300'
+                    : sampleHealth.measured < sampleHealth.total
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : 'bg-emerald-500/15 text-emerald-300'
+                }`}
+                title="Measured follower samples / total samples, and the achieved sample rate"
+              >
+                {sampleHealth.measured === 0 ? 'NO TELEMETRY' : `${sampleHealth.measured}/${sampleHealth.total} @ ${sampleHealth.hz}Hz`}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-[11px] text-zinc-400">Records both videos and commanded joint targets at 20 Hz. It does not move the robot.</p>
         </div>

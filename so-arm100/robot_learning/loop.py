@@ -4,10 +4,19 @@ Three subcommands, one config. Every hardware id, port, camera index and
 convention lives in CONFIG below instead of being retyped into 15-flag command
 lines, which is where the old loop lost most of its time.
 
+Two collection paths feed the same train/eval loop:
+
+    # A) record in the app (self-paced), then convert
+    python robot_learning/loop.py build  --name circle_insert_app
+    python robot_learning/loop.py train  --dataset circle_insert_app --steps 40000
+    python robot_learning/loop.py eval   --checkpoint <path> --episodes 10
+
+    # B) record with LeRobot's own CLI (writes a dataset directly)
     python robot_learning/loop.py record --episodes 50
     python robot_learning/loop.py record --episodes 30 --grasp-only
     python robot_learning/loop.py train  --steps 40000
-    python robot_learning/loop.py eval   --episodes 10
+
+    python robot_learning/loop.py replay --episode 0   # safety gate, either path
 
 This is a thin wrapper: it builds and execs LeRobot's own CLIs, printing the
 command first. Nothing is reimplemented, so anything it does can be run by hand.
@@ -111,6 +120,54 @@ def cmd_record(args: argparse.Namespace) -> int:
     return run(cmd, args.dry_run)
 
 
+def cmd_build(args: argparse.Namespace) -> int:
+    """Convert schemaVersion-2 app recordings into a LeRobot dataset.
+
+    Only needed on the app-recorder path. `loop.py record` writes a LeRobot
+    dataset directly, so it skips this step.
+    """
+    root = dataset_root(args.name)
+    if root.exists():
+        sys.exit(f"{root} already exists. Remove it or pass a different --name.")
+
+    cmd = [
+        str(CONFIG["venv_bin"] / "python"),
+        "robot_learning/build_lerobot_dataset_v2.py",
+        f"--manifest={args.manifest}",
+        f"--episodes-root={args.episodes_root}",
+        f"--output={root}",
+        f"--repo-id=local/{args.name}",
+        f"--task={CONFIG['task']}",
+    ]
+    print(f"\nBuilding '{args.name}' from app recordings listed in {args.manifest}")
+    print("Episodes must be schemaVersion 2 (measured follower telemetry). v1")
+    print("recordings are refused -- they have no real observation.state.\n")
+    return run(cmd, args.dry_run)
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    root = dataset_root(args.dataset)
+    if not root.exists():
+        sys.exit(f"No dataset at {root}. Record one first.")
+
+    print(f"\nReplaying '{args.dataset}' episode {args.episode} on the follower.")
+    print("This is the safety gate before any policy drives the arm: it proves the")
+    print("recorded action column round-trips to real motion on this hardware.")
+    print("The arm moves WITHOUT the app's Arm Motion gate -- hand on the power")
+    print("switch, workspace clear, and the follower roughly at the episode's start pose.\n")
+
+    cmd = [
+        bin_path("lerobot-replay"),
+        f"--robot.type={CONFIG['follower']['type']}",
+        f"--robot.port={CONFIG['follower']['port']}",
+        f"--robot.id={CONFIG['follower']['id']}",
+        f"--dataset.repo_id=local/{args.dataset}",
+        f"--dataset.root={root}",
+        f"--dataset.episode={args.episode}",
+    ]
+    return run(cmd, args.dry_run)
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     root = dataset_root(args.dataset)
     if not root.exists():
@@ -173,7 +230,14 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print the command without running it")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("record", help="teleoperated demonstration collection")
+    # --dry-run is accepted on either side of the subcommand. SUPPRESS keeps the
+    # subparser copy from overwriting a flag already given before the subcommand.
+    def add_dry_run(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
+                       help="print the command without running it")
+        return p
+
+    p = add_dry_run(sub.add_parser("record", help="teleoperated demonstration collection"))
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--name", help="dataset name (default: circle_insert, or grasp_only)")
     p.add_argument("--grasp-only", action="store_true", help="short reach->grasp->lift episodes")
@@ -182,7 +246,18 @@ def main() -> None:
     p.add_argument("--resume", action="store_true", help="append to an existing dataset")
     p.set_defaults(func=cmd_record)
 
-    p = sub.add_parser("train", help="fit a policy on recorded demonstrations")
+    p = add_dry_run(sub.add_parser("build", help="convert app recordings into a LeRobot dataset"))
+    p.add_argument("--name", default="circle_insert_app", help="output dataset name")
+    p.add_argument("--manifest", default="outputs/episode-review/curated-episodes.txt")
+    p.add_argument("--episodes-root", default="data/local/episodes")
+    p.set_defaults(func=cmd_build)
+
+    p = add_dry_run(sub.add_parser("replay", help="replay a recorded episode on hardware (safety gate)"))
+    p.add_argument("--dataset", default="circle_insert")
+    p.add_argument("--episode", type=int, default=0)
+    p.set_defaults(func=cmd_replay)
+
+    p = add_dry_run(sub.add_parser("train", help="fit a policy on recorded demonstrations"))
     p.add_argument("--dataset", default="circle_insert")
     p.add_argument("--policy", default="act", choices=["act", "smolvla", "diffusion"])
     p.add_argument("--steps", type=int, default=40000)
@@ -191,7 +266,7 @@ def main() -> None:
     p.add_argument("--job", help="job name (default: <policy>_<dataset>_<steps>)")
     p.set_defaults(func=cmd_train)
 
-    p = sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware")
+    p = add_dry_run(sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware"))
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--episode-time", type=int, default=30)
