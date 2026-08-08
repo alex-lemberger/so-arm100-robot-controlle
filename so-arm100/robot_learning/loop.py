@@ -74,6 +74,51 @@ def dataset_root(name: str) -> Path:
     return REPO_ROOT / "data" / "local" / "datasets" / name
 
 
+def resolve_checkpoint(args: argparse.Namespace) -> Path:
+    """Turn --checkpoint / --run / nothing into a pretrained_model path.
+
+    Exists because the full path is ~95 characters, and pasting a command that
+    long into a terminal wraps it mid-token: a paste that split
+    `.../trimmed_20000/c` from `heckpoints/...` is what sent zsh looking for a
+    command called `heckpoints`. Short commands are not a convenience here,
+    they are the difference between the session starting and not.
+    """
+    if args.checkpoint:
+        return Path(args.checkpoint)
+
+    runs = REPO_ROOT / "outputs" / "train"
+    if args.run:
+        candidates = [runs / args.run]
+        if not candidates[0].is_dir():
+            sys.exit(f"No training run at {candidates[0]}")
+    else:
+        # Most recently modified run that actually has checkpoints. Ambiguous
+        # by nature, so the resolved path is always printed before anything
+        # touches the hardware.
+        candidates = sorted(
+            (d for d in runs.iterdir() if (d / "checkpoints").is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            sys.exit(f"No training runs with checkpoints under {runs}. Pass --checkpoint.")
+
+    run_dir = candidates[0]
+    steps = sorted(
+        (d for d in (run_dir / "checkpoints").iterdir() if d.name.isdigit()),
+        key=lambda d: int(d.name),
+    )
+    if not steps:
+        sys.exit(f"No numbered checkpoints under {run_dir / 'checkpoints'}. Pass --checkpoint.")
+    return steps[-1] / "pretrained_model"
+
+
+def add_checkpoint_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    parser.add_argument("--checkpoint", help="explicit path to a pretrained_model directory")
+    parser.add_argument("--run", help="training run under outputs/train (uses its last checkpoint)")
+    return parser
+
+
 def run(cmd: list[str], dry_run: bool) -> int:
     print("\n" + " \\\n  ".join(shlex.quote(part) for part in cmd) + "\n", flush=True)
     if dry_run:
@@ -289,7 +334,7 @@ def cmd_dagger(args: argparse.Namespace) -> int:
 
     Cheaper and better targeted than recording another 50 blind demonstrations.
     """
-    checkpoint = Path(args.checkpoint)
+    checkpoint = resolve_checkpoint(args)
     if not checkpoint.exists():
         sys.exit(f"No checkpoint at {checkpoint}")
 
@@ -355,7 +400,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    checkpoint = Path(args.checkpoint)
+    checkpoint = resolve_checkpoint(args)
     if not checkpoint.exists():
         sys.exit(f"No checkpoint at {checkpoint}")
 
@@ -476,8 +521,7 @@ def main() -> None:
     p.add_argument("--job", help="job name (default: <policy>_<dataset>_<steps>)")
     p.set_defaults(func=cmd_train)
 
-    p = add_dry_run(sub.add_parser("dagger", help="human-in-the-loop correction collection"))
-    p.add_argument("--checkpoint", required=True)
+    p = add_checkpoint_args(add_dry_run(sub.add_parser("dagger", help="human-in-the-loop correction collection")))
     p.add_argument("--episodes", type=int, default=10, help="correction episodes to collect")
     p.add_argument("--episode-time", type=int, default=60)
     p.add_argument("--record-autonomous", action="store_true",
@@ -493,8 +537,7 @@ def main() -> None:
     p.add_argument("--into", required=True, help="name of the merged dataset to write")
     p.set_defaults(func=cmd_merge)
 
-    p = add_dry_run(sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware"))
-    p.add_argument("--checkpoint", required=True)
+    p = add_checkpoint_args(add_dry_run(sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware")))
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--episode-time", type=int, default=30)
     p.add_argument("--reset-time", type=int, default=15,
