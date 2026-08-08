@@ -120,6 +120,21 @@ def cmd_record(args: argparse.Namespace) -> int:
     return run(cmd, args.dry_run)
 
 
+def cmd_grid(args: argparse.Namespace) -> int:
+    """Print the start-pose grid for a session recorded in the app.
+
+    `record` prints this for the lerobot-record path, but app recordings never
+    pass through it. Diversity has been left to intent twice and delivered
+    essentially none both times, so the grid needs to be visible either way.
+    """
+    print(f"\nStart-pose grid — {args.episodes} episodes. Mark the positions on the paper.\n")
+    for i in range(args.episodes):
+        pos, rot = POSITION_GRID[i % len(POSITION_GRID)]
+        print(f"  ep {i:>3}  piece {pos:<6} rotated {rot:>3} deg")
+    print("\nCycle in order. Do not improvise -- that is what failed the last two times.\n")
+    return 0
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     """Convert schemaVersion-2 app recordings into a LeRobot dataset.
 
@@ -129,6 +144,31 @@ def cmd_build(args: argparse.Namespace) -> int:
     root = dataset_root(args.name)
     if root.exists():
         sys.exit(f"{root} already exists. Remove it or pass a different --name.")
+
+    # The existing curated-episodes.txt lists schemaVersion-1 episodes, which
+    # the v2 builder correctly refuses. Rather than fail with a confusing error,
+    # offer a fresh manifest of every v2 episode for the human to trim.
+    manifest = Path(args.manifest)
+    if not manifest.is_file():
+        episodes_root = REPO_ROOT / args.episodes_root
+        found = []
+        for path in sorted(episodes_root.glob("*/metadata.json")):
+            try:
+                if json.loads(path.read_text()).get("schemaVersion") == 2:
+                    found.append(path.parent.name)
+            except (json.JSONDecodeError, OSError):
+                continue
+        if not found:
+            sys.exit(f"No schemaVersion-2 episodes found under {episodes_root}.")
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            "# schemaVersion-2 episodes, newest last. Delete the lines for bad\n"
+            "# takes, then re-run this command.\n" + "\n".join(found) + "\n"
+        )
+        sys.exit(
+            f"Wrote a manifest of {len(found)} schemaVersion-2 episode(s) to {manifest}.\n"
+            "Review it, delete any bad takes, then run this command again."
+        )
 
     cmd = [
         str(CONFIG["venv_bin"] / "python"),
@@ -245,6 +285,10 @@ def main() -> None:
     p.add_argument("--reset-time", type=int, default=10)
     p.add_argument("--resume", action="store_true", help="append to an existing dataset")
     p.set_defaults(func=cmd_record)
+
+    p = sub.add_parser("grid", help="print the start-pose grid for an app recording session")
+    p.add_argument("--episodes", type=int, default=50)
+    p.set_defaults(func=cmd_grid)
 
     p = add_dry_run(sub.add_parser("build", help="convert app recordings into a LeRobot dataset"))
     p.add_argument("--name", default="circle_insert_app", help="output dataset name")
