@@ -223,12 +223,14 @@ def cmd_train(args: argparse.Namespace) -> int:
     if not root.exists():
         sys.exit(f"No dataset at {root}. Record one first.")
 
-    job = args.job or f"{args.policy}_{args.dataset}_{args.steps}"
+    # Name the job after the base checkpoint when fine-tuning one, not after
+    # --policy (which keeps its "act" default and would mislabel a SmolVLA run).
+    stem = args.base.rsplit("/", 1)[-1].removesuffix("_base") if args.base else args.policy
+    job = args.job or f"{stem}_{args.dataset}_{args.steps}" + ("_lora" if args.lora else "")
     cmd = [
         bin_path("lerobot-train"),
         f"--dataset.repo_id=local/{args.dataset}",
         f"--dataset.root={root}",
-        f"--policy.type={args.policy}",
         f"--policy.device={args.device}",
         f"--steps={args.steps}",
         f"--batch_size={args.batch_size}",
@@ -236,9 +238,100 @@ def cmd_train(args: argparse.Namespace) -> int:
         f"--job_name={job}",
         "--policy.push_to_hub=false",
     ]
-    print(f"\nTraining {args.policy} on '{args.dataset}' for {args.steps} steps -> outputs/train/{job}")
+
+    if args.base:
+        # Fine-tune from a pretrained base. --policy.input_features=null makes
+        # lerobot infer the camera keys from the dataset instead of taking the
+        # base checkpoint's own 3-camera config, which this 2-camera setup does
+        # not match.
+        cmd += [f"--policy.path={args.base}", "--policy.input_features=null"]
+    else:
+        cmd.append(f"--policy.type={args.policy}")
+
+    if args.lora:
+        # Parameter-efficient fine-tuning (docs/source/peft_training.mdx).
+        # Adapts a low-rank matrix instead of all 450M parameters: cheaper
+        # backward pass, so a larger batch fits, and the resulting adapter is a
+        # fraction of a full checkpoint -- the 30k full fine-tune produced 7.4 GB
+        # that had to move over USB. By default PEFT targets q_proj/v_proj in
+        # SmolVLA's LM expert plus the state and action projections.
+        #
+        # The 10x learning rate is not optional. The PEFT doc: "The learning
+        # rate ... can usually be scaled by a factor of 10 compared to the
+        # learning rate used for full fine-tuning (e.g., 1e-4 normal, so 1e-3
+        # using LoRA)." A LoRA run left at the full-fine-tune LR just
+        # underfits quietly.
+        cmd += [
+            "--peft.method_type=LORA",
+            f"--peft.r={args.lora_r}",
+            f"--peft.lora_alpha={args.lora_alpha}",
+            f"--policy.optimizer_lr={args.lr}",
+            f"--policy.scheduler_decay_lr={args.lr / 10}",
+        ]
+
+    label = f"{args.base or args.policy}{' + LoRA r=' + str(args.lora_r) if args.lora else ''}"
+    print(f"\nTraining {label} on '{args.dataset}' for {args.steps} steps -> outputs/train/{job}")
+    print(f"batch_size={args.batch_size}" + (f", lr={args.lr} (10x, LoRA)" if args.lora else ""))
     print("Keep the machine awake -- a 2026-08-06 run took ~5h instead of ~1h because it slept.")
     print("Prefix with `caffeinate -i` if running unattended.\n")
+    return run(cmd, args.dry_run)
+
+
+def cmd_dagger(args: argparse.Namespace) -> int:
+    """Human-in-the-loop correction collection (docs/source/hil_data_collection.mdx).
+
+    Behavioural cloning only ever sees successful demonstrations, so at
+    deployment small errors compound into states that appear nowhere in the
+    training set. DAgger records the recovery from *this* policy's actual
+    failures: run it on the arm, take over on the leader when it is about to
+    fail, and the correction is saved as training data. Fine-tune on demos plus
+    corrections, then repeat against the new failure modes.
+
+    Cheaper and better targeted than recording another 50 blind demonstrations.
+    """
+    checkpoint = Path(args.checkpoint)
+    if not checkpoint.exists():
+        sys.exit(f"No checkpoint at {checkpoint}")
+
+    print(f"\nHuman-in-the-loop correction collection -> local/dagger_{args.tag}")
+    print(f"Policy: {checkpoint}")
+    print(f"Leader: {CONFIG['leader']['type']} on {CONFIG['leader']['port']}\n")
+    print("Keyboard, during the session:")
+    print("  space   pause/resume the policy (it holds position while paused)")
+    print("  tab     toggle correction recording -- teleoperate the recovery")
+    print("  enter   upload (corrections-only mode)")
+    print("\nPer episode: watch, pause when failure is imminent, take the leader,")
+    print("drive back to a good state, hand control back. Repeat as needed -- no")
+    print("reset is required just because you intervened.\n")
+    print("Only correction windows are recorded by default; each becomes its own")
+    print("episode. Pass --record-autonomous to keep the autonomous frames too.\n")
+
+    cmd = [
+        bin_path("lerobot-rollout"),
+        "--strategy.type=dagger",
+        f"--inference.type={args.inference}",
+        f"--inference.rtc.execution_horizon={args.execution_horizon}",
+        f"--robot.type={CONFIG['follower']['type']}",
+        f"--robot.port={CONFIG['follower']['port']}",
+        f"--robot.id={CONFIG['follower']['id']}",
+        f"--robot.max_relative_target={CONFIG['rollout_max_relative_target']}",
+        f"--robot.cameras={json.dumps(CONFIG['cameras'])}",
+        # DAgger refuses to start without a teleoperator: it has to mirror the
+        # follower's pose onto the leader at handover, which needs active motors.
+        f"--teleop.type={CONFIG['leader']['type']}",
+        f"--teleop.port={CONFIG['leader']['port']}",
+        f"--teleop.id={CONFIG['leader']['id']}",
+        f"--policy.path={checkpoint}",
+        f"--policy.device={args.device}",
+        f"--dataset.repo_id=local/dagger_{args.tag}",
+        f"--dataset.root={dataset_root('dagger_' + args.tag)}",
+        f"--dataset.single_task={CONFIG['task']}",
+        f"--dataset.num_episodes={args.episodes}",
+        f"--dataset.episode_time_s={args.episode_time}",
+        "--dataset.push_to_hub=false",
+    ]
+    if args.record_autonomous:
+        cmd.append("--strategy.record_autonomous=true")
     return run(cmd, args.dry_run)
 
 
@@ -346,11 +439,35 @@ def main() -> None:
     p = add_dry_run(sub.add_parser("train", help="fit a policy on recorded demonstrations"))
     p.add_argument("--dataset", default="circle_insert")
     p.add_argument("--policy", default="act", choices=["act", "smolvla", "diffusion"])
-    p.add_argument("--steps", type=int, default=40000)
-    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--base", help="fine-tune from a pretrained base, e.g. lerobot/smolvla_base")
+    p.add_argument("--steps", type=int, default=20000,
+                   help="20000 is the SmolVLA guide's figure; the scheduler auto-scales to it")
+    p.add_argument("--batch-size", type=int, default=32,
+                   help=("32, not lerobot-train's default of 8. Every checkpoint this project "
+                         "made before 2026-08-08 silently used 8 while the SmolVLA guide uses 64. "
+                         "Batch 64 was measured at ~3.0s/step on the 12GB 5070 -- VRAM thrashing, "
+                         "2x worse than linear. Above ~1.2s/step, come down."))
+    p.add_argument("--lora", action="store_true",
+                   help="parameter-efficient fine-tuning: small adapter instead of a 7.4GB checkpoint")
+    p.add_argument("--lora-r", type=int, default=64, help="LoRA rank; higher is closer to full fine-tuning")
+    p.add_argument("--lora-alpha", type=int, default=64, help="LoRA scaling (scaling = alpha / r)")
+    p.add_argument("--lr", type=float, default=1e-3,
+                   help="LoRA wants ~10x the full-fine-tune LR (1e-4 -> 1e-3); only applied with --lora")
     p.add_argument("--device", default="mps")
     p.add_argument("--job", help="job name (default: <policy>_<dataset>_<steps>)")
     p.set_defaults(func=cmd_train)
+
+    p = add_dry_run(sub.add_parser("dagger", help="human-in-the-loop correction collection"))
+    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--episodes", type=int, default=10, help="correction episodes to collect")
+    p.add_argument("--episode-time", type=int, default=60)
+    p.add_argument("--record-autonomous", action="store_true",
+                   help="also record the autonomous frames, not just the correction windows")
+    p.add_argument("--inference", default="rtc", choices=["rtc", "sync"])
+    p.add_argument("--execution-horizon", type=int, default=10)
+    p.add_argument("--device", default="mps")
+    p.add_argument("--tag", default="latest", help="names the recorded correction dataset")
+    p.set_defaults(func=cmd_dagger)
 
     p = add_dry_run(sub.add_parser("eval", help="autonomous closed-loop rollout on real hardware"))
     p.add_argument("--checkpoint", required=True)
