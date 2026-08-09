@@ -105,8 +105,18 @@ accumulated duration, re-packs shards, unifies the task table and recomputes
 aggregate stats.
 
 Sources must agree on `fps`, `robot_type` and `features` or `validate_all_metadata`
-raises. Datasets from `lerobot-record` and from `lerobot-rollout` (what `dagger`
-runs) do agree — both are `so_follower` / 30 fps / the same 2-camera feature set.
+raises. There is one mismatch that matters here: a DAgger dataset carries an
+`intervention` bool column that demonstrations do not (added by
+`rollout/context.py:347`), so merging corrections into demos fails outright with
+`ValueError: Same features is expected`.
+
+`merge` handles it. In the default corrections-only mode every recorded frame is
+an intervention, so the column is constant and says nothing that "which dataset
+did this episode come from" doesn't — it is dropped, and only the small
+corrections dataset is rewritten (via LeRobot's `remove_feature`), never the
+hundreds of MB of demonstrations. Under `--record-autonomous` the flag varies and
+genuinely distinguishes corrections from autonomous frames, so `merge` stops
+rather than discard it.
 
 Verified 2026-08-09 by merging `circle_insert_50ep_trimmed` (50 ep) with
 `rollout_trimmed_b32` (10 ep): 60 episodes / 34,645 frames out, contiguous
