@@ -233,7 +233,12 @@ def cmd_build(args: argparse.Namespace) -> int:
         f"--episodes-root={args.episodes_root}",
         f"--output={root}",
         f"--repo-id=local/{args.name}",
-        f"--task={CONFIG['task']}",
+        # A grasp-only session is a different instruction from the full insert,
+        # and giving it its own string is what makes language discriminative:
+        # measured 2026-08-09, the 20k checkpoint reacts to prompt wording but
+        # not to its meaning, because all 26,078 training frames carried one
+        # identical task string. Two tasks in one dataset is what changes that.
+        f"--task={args.task or CONFIG['task']}",
     ]
     print(f"\nBuilding '{args.name}' from app recordings listed in {args.manifest}")
     print("Episodes must be schemaVersion 2 (measured follower telemetry). v1")
@@ -519,6 +524,7 @@ def main() -> None:
     p.add_argument("--name", default="circle_insert_app", help="output dataset name")
     p.add_argument("--manifest", default="outputs/episode-review/curated-episodes.txt")
     p.add_argument("--episodes-root", default="data/local/episodes")
+    p.add_argument("--task", help=f"instruction for these episodes (default: {CONFIG['task']!r})")
     p.set_defaults(func=cmd_build)
 
     p = add_dry_run(sub.add_parser("replay", help="replay a recorded episode on hardware (safety gate)"))
