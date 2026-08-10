@@ -240,6 +240,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         # identical task string. Two tasks in one dataset is what changes that.
         f"--task={args.task or CONFIG['task']}",
     ]
+    if args.trim:
+        cmd.append("--trim-stationary")
     print(f"\nBuilding '{args.name}' from app recordings listed in {args.manifest}")
     print("Episodes must be schemaVersion 2 (measured follower telemetry). v1")
     print("recordings are refused -- they have no real observation.state.\n")
@@ -525,6 +527,11 @@ def main() -> None:
     p.add_argument("--manifest", default="outputs/episode-review/curated-episodes.txt")
     p.add_argument("--episodes-root", default="data/local/episodes")
     p.add_argument("--task", help=f"instruction for these episodes (default: {CONFIG['task']!r})")
+    p.add_argument(
+        "--trim",
+        action="store_true",
+        help="drop the motionless lead-in and tail of each take (as circle_insert_50ep_trimmed was built)",
+    )
     p.set_defaults(func=cmd_build)
 
     p = add_dry_run(sub.add_parser("replay", help="replay a recorded episode on hardware (safety gate)"))
