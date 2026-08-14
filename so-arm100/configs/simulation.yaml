@@ -162,5 +162,35 @@ camera:
   # Rough top-down framing matching observation.images.overview's angle. Not
   # calibrated against the real camera mount -- good enough for --capture-dir
   # sanity screenshots, not for anything pixel-accurate.
-  position: [0.35, -0.35, 0.45]
-  target: [0.15, -0.05, 0.0]
+  # Re-aimed 2026-08-14 after the board was measured onto [0, -0.223]: the old
+  # target [0.15, -0.05, 0] was left over from when the board was guessed at +x,
+  # and left the board sliced by the frame edge at a steep oblique angle. Caught
+  # by the scene gate's side-by-side, which is the point of it.
+  # Mirrored in x after the first side-by-side: viewing from +x put the robot to
+  # the RIGHT of the board, where the real overview has it to the LEFT. Then
+  # pulled back and widened, because at USD's default 50mm the robot filled half
+  # the frame and the board was clipped.
+  #
+  # focal_length is NOT calibrated against the real webcam -- it is chosen to
+  # frame the scene like the reference photo. Matching the real camera's
+  # intrinsics properly is still open, and matters for sim-to-real transfer of
+  # rendered training images.
+  position: [-0.50, 0.10, 0.55]
+  target: [0.0, -0.20, 0.0]
+  focal_length: 20.0
+
+# The wrist camera -- the view whose absence is the leading explanation for
+# A/B/C's 0/20 (see docs/replan-2026-08-14-camera-confound.md). Rigidly attached
+# to `parent_link`, so it tracks forward kinematics without any per-frame
+# orientation maths.
+#
+# position/target are WORLD coordinates AT THE ROBOT'S REST POSE; the rigid
+# camera-to-link offset is taken from them once and preserved thereafter. That
+# keeps the numbers directly checkable against a rendered rest frame. Defaults
+# put it behind and above the jaws looking forward past them, matching how the
+# real wrist view frames the gripper at the bottom of frame -- eyeballed against
+# circle_insert_50ep's observation.images.wrist, NOT calibrated to the real mount.
+wrist_camera:
+  parent_link: gripper     # /World/so_arm100/<parent_link>
+  position: [0.0, -0.13, 0.165]
+  target: [0.0, -0.32, 0.0]

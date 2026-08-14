@@ -76,6 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="Directory to write the merged dataset to")
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--skip-scene-gate", action="store_true",
+                        help="render synthetic episodes from a scene that has not been checked "
+                             "against reality; recorded in the output's provenance")
     return parser.parse_args()
 
 
@@ -84,6 +87,19 @@ def main() -> None:
     real_episodes = parse_episode_list(args.real_episodes) if args.real_episodes else []
     if not real_episodes and not args.synthetic_dir:
         raise ValueError("Nothing to export: pass --real-episodes and/or --synthetic-dir")
+
+    # Scene gate BEFORE booting Isaac, and only when synthetic frames are actually
+    # being rendered -- a real-only export touches no scene. See
+    # src/bridge/scene_gate.py for why this is a gate.
+    gate_note = "not applicable (real episodes only)"
+    if args.synthetic_dir:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from bridge.scene_gate import require_gate  # noqa: E402
+
+        if not args.scene_config:
+            raise ValueError("--scene-config is required with --synthetic-dir (the scene gate needs it)")
+        gate_note = require_gate(args.scene_config, override=args.skip_scene_gate)
+    print(f"scene gate: {gate_note}")
 
     # SimulationApp must exist before any other isaacsim/omni import -- even though
     # real-only exports don't touch Isaac, this script always runs under Isaac's
@@ -264,7 +280,12 @@ def main() -> None:
             print(f"  {episode_id} <- real episode {parent_ep}: {n} frames")
 
     dataset.finalize()
+    # provenance.json keeps its existing list-of-episodes shape -- circle_grasp_v1_mixed_10r_100s
+    # is already written that way and there is no reason to make old and new datasets
+    # disagree. The scene gate goes in its own sidecar instead, so a dataset still
+    # records whether the scene it came from had been checked.
     (out_root / "meta" / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    (out_root / "meta" / "scene_gate.json").write_text(json.dumps({"scene_gate": gate_note}, indent=2))
 
     n_real = sum(1 for p in provenance if p["source_type"] == "REAL_HUMAN")
     n_synth = sum(1 for p in provenance if p["source_type"] == "SIM_SYNTHETIC")

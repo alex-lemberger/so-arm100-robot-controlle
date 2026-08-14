@@ -61,12 +61,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settle-steps", type=int, default=60)
     parser.add_argument("--out-dir", default=None, help="default: data/synthetic/<dataset name>")
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--skip-scene-gate", action="store_true",
+                        help="generate from a scene that has not been checked against reality; "
+                             "recorded in the output's provenance")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     parent_episodes = parse_episode_list(args.parent_episodes)
+    # Scene gate BEFORE booting Isaac: refuse to generate from a scene nobody has
+    # checked against reality. See src/bridge/scene_gate.py.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from bridge.scene_gate import require_gate  # noqa: E402
+
+    gate_note = require_gate(args.scene_config, override=args.skip_scene_gate)
+    print(f"scene gate: {gate_note}")
+
     out_dir = Path(args.out_dir or f"data/synthetic/{Path(args.dataset).name}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -160,6 +171,7 @@ def main() -> None:
                 "parent_episode": f"{Path(args.dataset).name}/episode_{parent_ep}",
                 "seed": episode_seed,
                 "randomization": variation.as_dict(),
+                "scene_gate": gate_note,
                 "object_final_pose": obj_pos.tolist(),
                 "settle_error_rad": settle_err,
                 "validation": result,
