@@ -19,6 +19,29 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REFERENCE = REPO_ROOT / "docs" / "reference" / "board_reference_demo.png"
+MM_PER_PX = 107.0 / 172.4  # see the note in main()
+
+
+def peg_centroid(bgr):
+    """The loose peg on the paper: saturated green-cyan, left of the board region.
+
+    Grasping does not involve the board at all, so board alignment says nothing
+    about whether the peg is where the demos had it. Measured 2026-08-14: the
+    demos cluster the peg tightly (x 371-396, y 556-583) and it was being placed
+    ~22mm outside that, while grasp success sat at 2/7 and 4/9.
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, s_, v = hsv[:, :, 0].astype(int), hsv[:, :, 1].astype(int), hsv[:, :, 2].astype(int)
+    mask = ((h > 70) & (h < 100) & (s_ > 60) & (v > 50)).astype(np.uint8)
+    mask[:, 430:] = 0    # exclude the board's own recesses
+    mask[:380, :] = 0    # exclude the arm
+    n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask)
+    if n < 2:
+        return None
+    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    if stats[i, cv2.CC_STAT_AREA] < 200:
+        return None
+    return cent[i]
 
 
 def board_shift(ref_bgr: np.ndarray, live_bgr: np.ndarray) -> tuple[float, float, float]:
@@ -76,8 +99,12 @@ def main() -> None:
     dx, dy, response = board_shift(ref, live)
     dist = (dx**2 + dy**2) ** 0.5
 
-    # ~200mm board spanning ~340px in this view.
-    mm = dist * 200.0 / 340.0
+    # Calibrated against known geometry rather than guessed: in the reference
+    # frame the circle recess sits at (515.6, 417.4) and the pentagon at
+    # (555.8, 249.8), 172.4px apart, and docs/reference/toy.png puts those
+    # centres 107mm apart. The previous constant came from an eyeballed "200mm
+    # board over ~340px" before the board was measured at 174mm.
+    mm = dist * MM_PER_PX
 
     print(f"board shift (live vs reference):  dx={dx:+.1f}px  dy={dy:+.1f}px")
     print(f"  |d|={dist:.1f}px  (~{mm:.0f} mm)   correlation={response:.3f}")
@@ -89,7 +116,28 @@ def main() -> None:
     else:
         print(f"MOVE THE BOARD {abs(dx):.0f}px {'left' if dx > 0 else 'right'} "
               f"and {abs(dy):.0f}px {'up' if dy > 0 else 'down'} "
-              f"(~{abs(dx)*200/340:.0f}mm / ~{abs(dy)*200/340:.0f}mm), then re-run.")
+              f"(~{abs(dx)*MM_PER_PX:.0f}mm / ~{abs(dy)*MM_PER_PX:.0f}mm), then re-run.")
+        print("  'right'/'down' are as seen in the OVERVIEW CAMERA IMAGE, not from")
+        print("  where you stand: image-right is the towel/cable side of the paper,")
+        print("  image-down is toward the paper's near edge.")
+
+    ref_peg, live_peg = peg_centroid(ref), peg_centroid(live)
+    if ref_peg is None or live_peg is None:
+        print("\nPEG: could not locate it in one of the frames "
+              f"(reference={'ok' if ref_peg is not None else 'MISSING'}, "
+              f"live={'ok' if live_peg is not None else 'MISSING'})")
+    else:
+        pdx, pdy = live_peg[0] - ref_peg[0], live_peg[1] - ref_peg[1]
+        pdist = (pdx**2 + pdy**2) ** 0.5
+        print(f"\nPEG  dx={pdx:+.1f}px dy={pdy:+.1f}px  |d|={pdist:.1f}px (~{pdist*MM_PER_PX:.0f} mm)")
+        if pdist < 12:
+            print("  peg is where the demos put it.")
+        else:
+            print(f"  MOVE THE PEG {abs(pdx)*MM_PER_PX:.0f}mm "
+                  f"{'left' if pdx > 0 else 'right'} and {abs(pdy)*MM_PER_PX:.0f}mm "
+                  f"{'up' if pdy > 0 else 'down'} (image directions, as above).")
+            print("  Grasping does not involve the board, so this is the one that")
+            print("  matters for the grasp failures.")
 
     cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
     print(f"overlay written to {args.out}")
