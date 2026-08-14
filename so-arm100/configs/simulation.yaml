@@ -47,30 +47,60 @@ object:
 # episode showed the peg with nothing to insert it into, and board pose could not
 # vary because there was no board.
 #
-# Layout is two columns x three rows of recesses, matching the real board in
-# circle_insert_50ep's overview frames. Dimensions and offsets are eyeballed from
-# that frame at ~0.59 mm/px, NOT measured -- same caveat as `object` below, and it
-# matters more here: once board pose is the variable under test, a systematic
-# geometry error stops being absorbed by training and starts biasing the result.
-# Measure the real board before trusting sim-to-real numbers from this.
+# Dimensions below are MEASURED, from the dimensioned drawing in
+# docs/reference/toy.png (supplied 2026-08-14), not eyeballed. Board is 174mm
+# square and 12mm thick. Recess centres are derived from that drawing's own gap
+# dimensions -- e.g. the square's bottom edge is 41mm above the board's bottom
+# edge and its right edge is 62mm from the board's right edge, which pins the
+# middle column; the circle sits 8mm from the right edge and 13mm from the
+# bottom. Cross-checked against pixel measurement of the same drawing, agreeing
+# to ~1-2mm on every shape.
 #
-# Recesses are visual-only discs/plates sitting on the slab's top face. They are
-# not modelled as holes: motion is replayed, not re-planned (Rule 4), so nothing
-# is ever physically inserted -- the recesses exist so the RENDERED image shows a
-# board whose appearance and pose move together.
+# Only the CIRCLE is dimensionally exact (recess diameter 50mm) -- it is the task
+# target and the one that has to be right. The other five are visual placeholders
+# at measured centres with area-equivalent extents, because Isaac's core object
+# API has no triangle or pentagon primitive. They exist so the rendered board
+# carries the right pattern and moves rigidly; they are not insertion targets.
+#
+# Recesses are visual-only: motion is replayed rather than re-planned (Rule 4), so
+# nothing is ever physically inserted, and a collider there would only risk
+# spurious contact with the replayed peg.
+#
+# `rotation` encodes the 90 degree offset between the drawing's orientation and how
+# the board actually sits in the overview frame. Confirmed, not just reasoned: with
+# it applied, tests/smoke_board_isaac.py reports the recesses resting in two columns
+# of three -- pentagon/square/circle at x~0.17 and triangle/rectangle/diamond at
+# x~0.25, top to bottom -- which is exactly the arrangement in
+# docs/reference/board_reference_demo.png. The drawing's own 3x2 layout only becomes
+# the photo's 2x3 under this rotation, and only with this sign.
+#
+# STILL UNMEASURED: where the board sits relative to the robot base. `position` is
+# an estimate, and it is the remaining geometry error on the sim-to-real path.
 board:
-  size: [0.20, 0.18, 0.012]     # x, y, z (m)
-  position: [0.22, 0.08, 0.005] # slab CENTER; top face at table_top(-0.001) + 0.012
-  rotation: [0.0, 0.0, 0.0, 1.0]
-  color: [0.85, 0.72, 0.50]     # light birch ply
+  size: [0.174, 0.174, 0.012]
+  position: [0.22, 0.08, 0.005]        # slab CENTRE; top face at table_top(-0.001) + 0.012
+  rotation: [0.0, 0.0, -0.70710678, 0.70710678]  # x, y, z, w -- -90 deg about +Z, see note above
+  # (normalised on read in board_component_pose, so a rounded 0.7071 would not
+  # silently rescale the board -- but keep it exact here anyway)
+  color: [0.85, 0.72, 0.50]            # light birch ply
   recesses:
-    # offset is (x, y) in the BOARD's own frame, from the slab centre.
-    - {id: pentagon,  offset: [-0.05,  0.055], shape: cylinder, radius: 0.026, color: [0.20, 0.55, 0.35]}
-    - {id: triangle,  offset: [ 0.05,  0.055], shape: cylinder, radius: 0.026, color: [0.90, 0.50, 0.25]}
-    - {id: square,    offset: [-0.05,  0.000], shape: cuboid,   size: [0.05, 0.05], color: [0.88, 0.42, 0.35]}
-    - {id: rectangle, offset: [ 0.05,  0.000], shape: cuboid,   size: [0.06, 0.04], color: [0.20, 0.35, 0.70]}
-    - {id: circle,    offset: [-0.05, -0.055], shape: cylinder, radius: 0.027, color: [0.20, 0.55, 0.45]}
-    - {id: diamond,   offset: [ 0.05, -0.055], shape: cuboid,   size: [0.05, 0.05], color: [0.45, 0.25, 0.55]}
+    # offset is (x, y) in the BOARD's own frame (the DRAWING's orientation: +x
+    # right, +y up), measured from the slab centre.
+    - {id: triangle,  offset: [-0.053,  0.027], shape: cylinder, radius: 0.019, color: [0.90, 0.50, 0.25]}
+    - {id: rectangle, offset: [ 0.002,  0.045], shape: cuboid,   size: [0.043, 0.063], color: [0.20, 0.35, 0.70]}
+    - {id: diamond,   offset: [ 0.054,  0.033], shape: cuboid,   size: [0.039, 0.039], yaw_deg: 45, color: [0.45, 0.25, 0.55]}
+    - {id: pentagon,  offset: [-0.053, -0.050], shape: cylinder, radius: 0.024, color: [0.20, 0.55, 0.35]}
+    - {id: square,    offset: [ 0.002, -0.023], shape: cuboid,   size: [0.046, 0.046], color: [0.88, 0.42, 0.35]}
+    # The one that matters: recess diameter 50mm, exact.
+    - {id: circle,    offset: [ 0.054, -0.049], shape: cylinder, radius: 0.025, color: [0.20, 0.55, 0.45]}
+
+# Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
+# Sec 16 -- values below are copied verbatim from that section's example, i.e. the
+# spec's own "conservative, do not start extreme" starting point, not independently
+# tuned). Motion itself is NOT re-planned at this stage (Rule 4) -- only the object's
+# pose/mass/friction and the robot's initial joint pose are randomized per synthetic
+# episode; the commanded joint trajectory is copied verbatim from the parent real
+# episode. See scripts/generate_synthetic.py.
 
 
 randomization:

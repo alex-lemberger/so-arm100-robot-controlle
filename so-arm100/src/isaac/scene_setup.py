@@ -158,7 +158,11 @@ def board_component_pose(board_base_pos, board_base_quat_wxyz, local_offset, loc
     import numpy as np
 
     base_pos = np.asarray(board_base_pos, dtype=np.float64)
+    # Normalised on the way in: a hand-written quaternion in the config (0.7071
+    # rather than 0.70710678) is not quite unit-length, and rotating an offset by it
+    # rescales the board slightly -- small, but it silently moves every recess.
     base_quat = np.asarray(board_base_quat_wxyz, dtype=np.float64)
+    base_quat = base_quat / np.linalg.norm(base_quat)
 
     if variation is None:
         total_quat = base_quat
@@ -216,7 +220,11 @@ def add_board(world, scene_cfg: dict[str, Any]):
 
     for rec in board_cfg.get("recesses", []):
         local_offset = np.array([rec["offset"][0], rec["offset"][1], local_z], dtype=np.float64)
-        pos, quat = board_component_pose(base_pos, base_quat, local_offset, identity)
+        # Per-recess yaw in the board's own frame: the diamond is a square plate
+        # turned 45 degrees. Stored with the component so it survives every
+        # subsequent board move rather than being re-derived.
+        local_quat = _yaw_quat_wxyz(rec.get("yaw_deg", 0.0))
+        pos, quat = board_component_pose(base_pos, base_quat, local_offset, local_quat)
         color = np.array(rec.get("color", [0.5, 0.5, 0.5]), dtype=np.float32)
         common = dict(
             prim_path=f"/World/board_recess_{rec['id']}",
@@ -232,7 +240,7 @@ def add_board(world, scene_cfg: dict[str, Any]):
             handle = world.scene.add(VisualCuboid(scale=np.array([sx, sy, disc_thickness], dtype=np.float32), **common))
         else:
             raise NotImplementedError(f"Unsupported recess shape {rec['shape']!r} for {rec['id']!r}")
-        components.append((handle, local_offset, identity))
+        components.append((handle, local_offset, local_quat))
 
     return components
 

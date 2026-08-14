@@ -69,10 +69,19 @@ def test_sampled_board_pose_within_configured_range():
 
 def test_recesses_stay_on_the_slab_under_yaw():
     """A rotated board must carry its recesses with it -- the failure mode of moving
-    the slab alone is recesses sliding off into empty space."""
+    the slab alone is recesses sliding off into empty space.
+
+    Uses the board's REAL configured base rotation (currently -90 deg about Z, the
+    offset between docs/reference/toy.png's orientation and how the board sits in
+    the overview frame), not an assumed identity, so the check covers the geometry
+    actually shipped.
+    """
+    from isaac.scene_setup import _quat_multiply_wxyz, _rotate_vec_wxyz, _yaw_quat_wxyz
+
     board = CFG["board"]
     base_pos = np.array(board["position"], dtype=np.float64)
-    base_quat = np.array([1.0, 0.0, 0.0, 0.0])
+    bx, by, bz, bw = board.get("rotation", [0.0, 0.0, 0.0, 1.0])
+    base_quat = np.array([bw, bx, by, bz])
     size = board["size"]
     local_z = size[2] / 2.0 + 0.001
 
@@ -82,22 +91,23 @@ def test_recesses_stay_on_the_slab_under_yaw():
         board_yaw_deg = 10.0
 
     slab_pos, _ = board_component_pose(base_pos, base_quat, np.zeros(3), IDENTITY, V)
+    total = _quat_multiply_wxyz(_yaw_quat_wxyz(V.board_yaw_deg), base_quat)
+    conj = np.array([total[0], -total[1], -total[2], -total[3]])
+
     ok = True
     for rec in board["recesses"]:
         local = np.array([rec["offset"][0], rec["offset"][1], local_z])
         pos, _ = board_component_pose(base_pos, base_quat, local, IDENTITY, V)
-        # Distance from slab centre must be preserved exactly by a rigid rotation.
         d_before = np.linalg.norm(local[:2])
         d_after = np.linalg.norm((pos - slab_pos)[:2])
         ok &= check(f"recess {rec['id']:9s} keeps its distance from slab centre under yaw",
                     abs(d_before - d_after) < 1e-9, f"{d_before:.6f} vs {d_after:.6f}")
-        # And must still lie inside the slab footprint.
-        local_after = pos[:2] - slab_pos[:2]
-        rot = np.array([[np.cos(np.deg2rad(-10)), -np.sin(np.deg2rad(-10))],
-                        [np.sin(np.deg2rad(-10)),  np.cos(np.deg2rad(-10))]])
-        unrotated = rot @ local_after
+        # Undo the board's total rotation and confirm it lands back inside the slab.
+        unrotated = _rotate_vec_wxyz(pos - slab_pos, conj)
         inside = abs(unrotated[0]) <= size[0] / 2 and abs(unrotated[1]) <= size[1] / 2
-        ok &= check(f"recess {rec['id']:9s} stays within the slab footprint", inside)
+        ok &= check(f"recess {rec['id']:9s} stays within the slab footprint", inside,
+                    f"local {np.round(unrotated[:2], 4)} vs half-extent "
+                    f"{[size[0]/2, size[1]/2]}")
     return ok
 
 
