@@ -1,0 +1,96 @@
+# Joint mapping: SO-ARM100 real robot <-> Isaac Sim articulation
+#
+# Verified 2026-08-10 by opening the USD headlessly (pxr.Usd/UsdPhysics loaded from
+# the leisaac-sim:latest Docker image's omni.usd.libs extension, no Isaac Sim GUI
+# needed) and enumerating PhysicsRevoluteJoint prims + their lower/upper limit attrs.
+#
+# real units:  degrees (joints 0-4), percent (gripper, joint 5)
+# isaac units:
+#   - USD-authored joint limit/drive attributes are in DEGREES (USD physics schema
+#     convention for revolute joints -- true for every joint below, including gripper).
+#   - Isaac Sim's runtime articulation control API (get/set_joint_positions etc.)
+#     operates in RADIANS. The trajectory converter must convert deg->rad for all
+#     six joints before sending targets through that API.
+
+real_robot:
+  type: so100_follower
+  control_frequency: 30  # Hz
+
+isaac_robot:
+  # Absolute path to the USD on the Linux machine (RobotStudio SO-ARM100 asset).
+  # Confirmed: real 6-DOF joint names match Isaac joint names exactly (see below),
+  # articulation root at /so_arm100/root_joint (has ArticulationRootAPI).
+  # NOTE: lives outside the repo, on a Windows-shared NTFS mount under a user's
+  # Downloads folder. Consider copying into the repo (e.g. so-arm100/assets/isaac/)
+  # so the pipeline doesn't depend on that external path staying put.
+  asset_path: /media/alex/F6E48479E4843DBD/Users/info/Downloads/Robots/RobotStudio/so100/so100.usd
+
+joints:
+  - name: shoulder_pan
+    real: shoulder_pan.pos
+    isaac: shoulder_pan       # verified: /so_arm100/joints/shoulder_pan (revolute, axis Y)
+    unit: degrees
+    isaac_limit_deg: [-114.5916, 114.5916]
+    scale: 1.0
+    offset: 0.0
+    invert: false
+
+  - name: shoulder_lift
+    real: shoulder_lift.pos
+    isaac: shoulder_lift      # verified: /so_arm100/joints/shoulder_lift (revolute, axis X)
+    unit: degrees
+    isaac_limit_deg: [0.0, 200.5352]
+    scale: 1.0
+    offset: 0.0
+    # Real values on circle_grasp_v1 ep0 range -104.0..-12.3 deg (negative), but the
+    # Isaac USD limit is entirely positive [0, 200.54] deg -> opposite sign convention.
+    # Confirmed by running src/bridge/trajectory_converter.py, which flagged all 635/635
+    # frames as out-of-range before this flip was added.
+    invert: true
+
+  - name: elbow_flex
+    real: elbow_flex.pos
+    isaac: elbow_flex         # verified: /so_arm100/joints/elbow_flex (revolute, axis X)
+    unit: degrees
+    isaac_limit_deg: [-180.0, 0.0]
+    scale: 1.0
+    offset: 0.0
+    # Real values on circle_grasp_v1 ep0 range 43.1..96.9 deg (positive), but the
+    # Isaac USD limit is entirely negative [-180, 0] deg -> opposite sign convention.
+    # Confirmed by running src/bridge/trajectory_converter.py, which flagged all 635/635
+    # frames as out-of-range before this flip was added.
+    invert: true
+
+  - name: wrist_flex
+    real: wrist_flex.pos
+    isaac: wrist_flex         # verified: /so_arm100/joints/wrist_flex (revolute, axis X)
+    unit: degrees
+    isaac_limit_deg: [-143.2394, 68.7549]
+    scale: 1.0
+    offset: 0.0
+    invert: false
+
+  - name: wrist_roll
+    real: wrist_roll.pos
+    isaac: wrist_roll         # verified: /so_arm100/joints/wrist_roll (revolute, axis Y)
+    unit: degrees
+    isaac_limit_deg: [-180.0, 180.0]
+    scale: 1.0
+    offset: 0.0
+    invert: false
+
+gripper:
+  real: gripper.pos
+  isaac: gripper              # verified: /so_arm100/joints/gripper (revolute, axis Z)
+  # IMPORTANT: unlike the earlier placeholder assumed, the Isaac gripper joint is
+  # ROTATIONAL (angular drive), not a linear/prismatic joint in metres. Its USD
+  # limits are -11.4592 deg (closed side) to 114.5916 deg (open side).
+  # scale/offset below linearly map real 0-100% onto that degree range assuming
+  # 0% (closed) -> lower limit and 100% (open) -> upper limit. This polarity is
+  # UNVERIFIED against real hardware -- confirm direction during first replay test
+  # and flip `invert` if the sim gripper opens/closes backwards.
+  unit: degrees
+  isaac_limit_deg: [-11.4592, 114.5916]
+  scale: 1.26051              # (114.5916 - (-11.4592)) / 100
+  offset: -11.4592             # isaac_deg = real_percent * scale + offset
+  invert: false                # TODO: confirm polarity on first replay

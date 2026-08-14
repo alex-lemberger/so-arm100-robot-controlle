@@ -1,0 +1,69 @@
+# Scene setup for Isaac Sim: table + one object (AGENTS_NEW.md Task 7 / Sec 13-14).
+#
+# The real workspace is NOT an elevated table -- the SO-ARM100 base sits directly on
+# the desk surface (see circle_grasp_v1's observation.images.overview frame 0: robot
+# base and the puzzle board/peg share one flat plane, on a sheet of paper). So "table"
+# below is a thin static slab whose TOP surface sits at z=0 (the USD robot's own
+# root_joint height), not a raised platform.
+#
+# Object is a small wooden cylinder -- the "circle" peg from the shape-sorter puzzle
+# used across circle_grasp_v1 / circle_insert_50ep (grasp the peg, insert it into the
+# board's circle hole). Dimensions and position below are eyeballed from that frame,
+# NOT yet measured with calipers/tape on the real setup -- treat as the "manually
+# defined initial object position" AGENTS_NEW.md Sec 14 explicitly allows for this
+# stage. Re-measure before trusting exact millimeter placement.
+
+table:
+  # position is the slab's CENTER; top face = position.z + size.z/2. Kept a hair
+  # below z=0 (rather than exactly flush) so it doesn't interpenetrate the robot's
+  # own base collider at world reset.
+  size: [0.6, 0.6, 0.02]        # x, y, z (m) -- roughly one sheet of A2 paper
+  position: [0.0, 0.0, -0.011]  # top face at z=-0.001
+  color: [0.9, 0.9, 0.85]       # off-white, matches the paper backdrop
+
+object:
+  id: circle_peg
+  shape: cylinder
+  radius: 0.02   # ~4cm diameter, eyeballed against the gripper jaw width in frame 0
+  height: 0.03
+  # ~0.19m from robot base (sqrt(0.18^2+0.05^2)), inside the ~0.23-0.30m EE reach
+  # cluster measured during Stage 1 replay validation -- picked to be reachable,
+  # not read off the real board layout yet.
+  position: [0.18, -0.05, 0.014]  # z = table top (-0.001) + half height
+  rotation: [0.0, 0.0, 0.0, 1.0]  # x, y, z, w (identity) -- USD/ROS convention
+  mass: 0.02   # kg, light wooden peg
+  base_friction: 0.5   # both static and dynamic; Isaac default-ish, not measured on real wood/paper
+  color: [0.20, 0.55, 0.45]  # matches the peg's green paint in the recording
+
+# Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
+# Sec 16 -- values below are copied verbatim from that section's example, i.e. the
+# spec's own "conservative, do not start extreme" starting point, not independently
+# tuned). Motion itself is NOT re-planned at this stage (Rule 4) -- only the object's
+# pose/mass/friction and the robot's initial joint pose are randomized per synthetic
+# episode; the commanded joint trajectory is copied verbatim from the parent real
+# episode. See scripts/generate_synthetic.py.
+randomization:
+  object_position:
+    x: [-0.03, 0.03]
+    y: [-0.03, 0.03]
+  object_rotation_deg:
+    yaw: [-15, 15]
+  mass_scale:
+    min: 0.9
+    max: 1.1
+  friction_scale:
+    min: 0.8
+    max: 1.2
+  # Not in AGENTS_NEW.md's example block, but Sec 16's prose also lists these two:
+  robot_initial_joint_noise_deg: 3.0   # +/- jitter (per arm joint) applied before the
+                                        # settle-to-frame-0 phase, not to the replay itself
+  camera_pixel_noise_std: 0.01         # sampled + recorded in provenance; NOT yet applied --
+                                        # --capture-dir rendering is a known-unresolved bug,
+                                        # see docs/linux-session-handover-2026-08-11.md
+
+camera:
+  # Rough top-down framing matching observation.images.overview's angle. Not
+  # calibrated against the real camera mount -- good enough for --capture-dir
+  # sanity screenshots, not for anything pixel-accurate.
+  position: [0.35, -0.35, 0.45]
+  target: [0.15, -0.05, 0.0]
