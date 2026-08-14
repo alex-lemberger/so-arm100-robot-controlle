@@ -81,6 +81,34 @@ datasets as confounded; see `docs/replan-2026-08-14-camera-confound.md`.
 The *source* datasets (`data/circle_grasp_v1`, `data/circle_insert_50ep`)
 still have both cameras — nothing was lost, the exports just need redoing.
 
+## Board position
+
+**The board's correct position is marked on the paper in pencil (2026-08-14).
+Put it back on the marks before any eval or recording.** It is not decorative:
+the demos in `circle_insert_50ep` were recorded with the board effectively
+fixed (measured drift across the whole set: max 4.3px, ~2.5mm), so a policy
+trained on them has no signal from which to handle a moved board. On
+2026-08-14 the board was found ~19mm out of place and the eval scored 0/10 --
+grasp and transport both worked, nothing seated. That size of offset is fatal
+for seating a peg and nearly harmless for the coarser phases, which is exactly
+the pattern seen.
+
+Verify before trusting a run:
+
+```bash
+./check_alignment.sh --out board_alignment.png    # prints offset in px and mm
+```
+
+Under ~5px (~3mm) is fine. It overlays the live overview camera on
+`docs/reference/board_reference_demo.png`, a real episode-start frame from the
+demos themselves, and measures by phase correlation on gradient magnitude --
+colour thresholding is NOT usable here, evening light halved the green pixel
+count and moved two consecutive readings of a stationary board by 15px.
+
+The board drifted ~32mm during the 2026-08-14 session. If it is ever unmarked
+or knocked, re-check **after** a run as well as before, or the later episodes
+are quietly confounded.
+
 ## Training
 
 - `--base <checkpoint> --steps N` for "resuming" a run does **not**

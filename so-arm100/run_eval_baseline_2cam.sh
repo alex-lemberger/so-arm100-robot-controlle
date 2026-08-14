@@ -11,9 +11,28 @@
 #
 # 10 episodes, not 20, so the number is directly comparable to the
 # historical 3/10.
+#
+# RUN ./check_alignment.sh FIRST. The 2026-08-14 attempt scored 0/10 with the
+# board ~19mm out of place, which is fatal for seating and nearly harmless for
+# grasp and transport -- exactly the pattern observed. A tag is required
+# because reusing one hits FileExistsError.
+#
+#   ./run_eval_baseline_2cam.sh baseline_2cam_r1
 set -e
 cd "$(dirname "$0")"
+
+TAG="${1:-}"
+if [ -z "$TAG" ]; then
+  echo "usage: $0 <tag>    (e.g. baseline_2cam_r1 -- must not already exist)" >&2
+  exit 2
+fi
+if [ -e "data/local/datasets/rollout_${TAG}" ]; then
+  echo "data/local/datasets/rollout_${TAG} already exists -- pick a fresh tag." >&2
+  exit 2
+fi
+
+echo "Reminder: ./check_alignment.sh should read ALIGNED before this is worth running."
 ./hw_docker.sh python robot_learning/loop.py eval \
   --checkpoint outputs/train/smolvla_circle_insert_50ep_30000/checkpoints/030000/pretrained_model \
   --episodes 10 \
-  --tag baseline_2cam_r0
+  --tag "$TAG"
