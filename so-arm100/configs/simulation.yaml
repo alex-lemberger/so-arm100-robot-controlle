@@ -192,5 +192,12 @@ camera:
 # circle_insert_50ep's observation.images.wrist, NOT calibrated to the real mount.
 wrist_camera:
   parent_link: gripper     # /World/so_arm100/<parent_link>
-  position: [0.0, -0.13, 0.165]
-  target: [0.0, -0.32, 0.0]
+  # Must sit OUTSIDE the gripper's own geometry. The first attempt put it at
+  # z=0.165, which is exactly the top of the gripper's bounding box
+  # (x[-0.024,0.025] y[-0.257,-0.135] z[0.068,0.165] at rest), so the camera was
+  # inside the housing and rendered a flat wall of the robot's own yellow.
+  # Above the gripper, behind the jaws (which reach y=-0.257), looking forward
+  # and down past them at the board.
+  position: [0.0, -0.21, 0.19]
+  target: [0.0, -0.29, 0.0]
+  focal_length: 18.0       # wide, like the real wrist webcam; not calibrated

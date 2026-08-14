@@ -62,18 +62,20 @@ try:
     import omni.usd
     from pxr import Gf, UsdLux
     _stage = omni.usd.get_context().get_stage()
-    UsdLux.DomeLight.Define(_stage, "/World/DomeLight").CreateIntensityAttr(2000)
+    UsdLux.DomeLight.Define(_stage, "/World/DomeLight").CreateIntensityAttr(1000)
     _distant = UsdLux.DistantLight.Define(_stage, "/World/DistantLight")
-    _distant.CreateIntensityAttr(3000)
+    _distant.CreateIntensityAttr(2500)
     _distant.AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 45.0))
 
     world.reset()
     robot.initialize()  # without this the articulation ignores apply_action entirely
 
-    overview = create_camera(scene_cfg["camera"]["position"], scene_cfg["camera"]["target"], (640, 480))
+    overview = create_camera(scene_cfg["camera"]["position"], scene_cfg["camera"]["target"], (640, 480),
+                             scene_cfg["camera"].get("focal_length"))
     wc = scene_cfg["wrist_camera"]
     link = f"/World/so_arm100/{wc['parent_link']}"
-    wrist = create_tracked_camera(wc["position"], wc["target"], link, (640, 480))
+    wrist = create_tracked_camera(wc["position"], wc["target"], link, (640, 480),
+                                  wc.get("focal_length"))
     log(f"wrist camera attached to {link}")
     warm_up(world, overview)
     warm_up(world, wrist.camera)

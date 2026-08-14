@@ -1,0 +1,50 @@
+{
+  "config": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/configs/simulation.yaml",
+  "config_sha256": "77f6f844e4f6bd0eb8720bffca443c5289d101c1968e6020192707d07c6720e5",
+  "approved_at": "2026-08-14T22:51:11.847224+00:00",
+  "approved_by": "alex",
+  "reference_frame": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/docs/reference/board_reference_demo.png",
+  "comparison_image": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/scene_gate_comparison.png",
+  "findings": [
+    {
+      "name": "board_exists",
+      "ok": true,
+      "detail": "board section present"
+    },
+    {
+      "name": "board_in_front_of_robot",
+      "ok": true,
+      "detail": "board centre y=-0.223 (must be negative; the robot faces -Y)"
+    },
+    {
+      "name": "board_within_reach",
+      "ok": true,
+      "detail": "board centre 0.223m from base (EE cluster measured at 0.23-0.30m)"
+    },
+    {
+      "name": "board_has_recesses",
+      "ok": true,
+      "detail": "6 recesses defined"
+    },
+    {
+      "name": "peg_clear_of_board",
+      "ok": true,
+      "detail": "peg (+0.140, -0.130) r=0.02 vs board x[-0.087,+0.087] y[-0.310,-0.136] -- overlapping spawns the two interpenetrating"
+    },
+    {
+      "name": "peg_within_reach",
+      "ok": true,
+      "detail": "peg 0.191m from base"
+    },
+    {
+      "name": "render_produced_pixels",
+      "ok": true,
+      "detail": "pixel std 18.6 (a flat frame means the camera sees nothing)"
+    },
+    {
+      "name": "board_visible_in_render",
+      "ok": true,
+      "detail": "recesses visible: ['circle', 'diamond', 'pentagon', 'rectangle', 'square', 'triangle']"
+    }
+  ]
+}

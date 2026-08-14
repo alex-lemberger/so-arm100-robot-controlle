@@ -16,9 +16,12 @@ image (and the object's randomized pose/mass/friction driving it) differs.
 
 Scope cuts, both to keep this a "small script" (Rule 2) and because nothing
 downstream needs them yet:
-  - Overview camera only, at the real dataset's own resolution (drop the
-    wrist camera -- rendering it for synthetic episodes would need a second,
-    wrist-relative camera whose pose tracks forward kinematics per frame).
+  - Both cameras, each at the real dataset's own resolution. The wrist view was
+    dropped originally because rendering it needs a wrist-relative camera whose
+    pose tracks forward kinematics per frame; that camera now exists
+    (src/isaac/camera_capture.py::create_tracked_camera). Dropping it was the
+    single change that most plausibly explains A/B/C's 0/20 -- every policy that
+    scored non-zero on this task was trained overview+wrist.
   - Provenance is kept as an integer `episode_source_type_id` feature
     (0=REAL_HUMAN, 1=SIM_SYNTHETIC, matching AGENTS_NEW.md Sec 17's source
     types) PLUS a `meta/provenance.json` sidecar with the full detail
@@ -119,6 +122,13 @@ def main() -> None:
     real_ds = LeRobotDataset(repo_id="local/real_source", root=args.real_dataset)
     real_image_feature = real_ds.features["observation.images.overview"]
     resolution_hw = tuple(real_image_feature["shape"][:2])  # (H, W) -- match real frames exactly, no resizing
+    if "observation.images.wrist" not in real_ds.features:
+        raise ValueError(
+            f"{args.real_dataset} has no observation.images.wrist. Every policy that scored "
+            "non-zero on this task used overview+wrist; exporting overview-only is what "
+            "produced Datasets A/B/C. Use a source dataset with both cameras."
+        )
+    wrist_resolution_hw = tuple(real_ds.features["observation.images.wrist"]["shape"][:2])
     joint_names = real_ds.features["action"]["names"]
 
     ep_meta = {row["episode_index"]: row for row in real_ds.meta.episodes}
@@ -127,12 +137,23 @@ def main() -> None:
         row = ep_meta[ep_idx]
         return range(row["dataset_from_index"], row["dataset_to_index"])
 
+    # Both cameras. Dropping the wrist view is the single change that most
+    # plausibly explains A/B/C's 0/20 -- every policy that ever scored non-zero on
+    # this task was trained overview+wrist, and the three that scored nothing were
+    # overview-only. Synthetic episodes can carry a wrist view now because the
+    # renderer has a camera that tracks the gripper link
+    # (src/isaac/camera_capture.py::create_tracked_camera).
     features = {
         "action": {"dtype": "float32", "shape": (6,), "names": joint_names},
         "observation.state": {"dtype": "float32", "shape": (6,), "names": joint_names},
         "observation.images.overview": {
             "dtype": "video",
             "shape": (*resolution_hw, 3),
+            "names": ["height", "width", "channels"],
+        },
+        "observation.images.wrist": {
+            "dtype": "video",
+            "shape": (*wrist_resolution_hw, 3),
             "names": ["height", "width", "channels"],
         },
         "episode_source_type_id": {"dtype": "int64", "shape": (1,), "names": None},
@@ -158,9 +179,11 @@ def main() -> None:
             # dataset's on-disk convention (HWC, matching robot_learning's precedent
             # in build_lerobot_dataset_v2.py) -- permute back before re-adding.
             image_hwc = row["observation.images.overview"].permute(1, 2, 0).contiguous()
+            wrist_hwc = row["observation.images.wrist"].permute(1, 2, 0).contiguous()
             dataset.add_frame(
                 {
                     "observation.images.overview": image_hwc,
+                    "observation.images.wrist": wrist_hwc,
                     "observation.state": row["observation.state"],
                     "action": row["action"],
                     "episode_source_type_id": np.array([SOURCE_TYPE_ID["REAL_HUMAN"]], dtype=np.int64),
@@ -190,7 +213,13 @@ def main() -> None:
         from isaacsim.core.utils.stage import add_reference_to_stage
 
         from bridge.trajectory_converter import convert_episode, load_robot_mapping  # noqa: E402
-        from isaac.camera_capture import capture_rgb, create_camera, warm_up  # noqa: E402
+        from isaac.camera_capture import (  # noqa: E402
+            capture_rgb,
+            capture_tracked_rgb,
+            create_camera,
+            create_tracked_camera,
+            warm_up,
+        )
         from isaac.replay_loop import settle_to_first_frame  # noqa: E402
         from isaac.scene_setup import add_table_and_object, apply_variation, load_scene_config  # noqa: E402
         from isaacsim.core.utils.types import ArticulationAction
@@ -215,15 +244,30 @@ def main() -> None:
         distant = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
         distant.CreateIntensityAttr(20000)
         distant.AddRotateXYZOp().Set((-45.0, 30.0, 0.0))
+        wrist_cfg = scene_cfg.get("wrist_camera")
+        if wrist_cfg is None:
+            raise ValueError(
+                f"{args.scene_config} has no `wrist_camera` section, so synthetic episodes "
+                "cannot carry the wrist view the real ones do."
+            )
         camera = create_camera(
             position=scene_cfg["camera"]["position"],
             look_at=scene_cfg["camera"]["target"],
             resolution=(resolution_hw[1], resolution_hw[0]),  # (W, H)
+            focal_length=scene_cfg["camera"].get("focal_length"),
         )
 
         world.reset()
         robot.initialize()
+        wrist_camera = create_tracked_camera(
+            wrist_cfg["position"],
+            wrist_cfg["target"],
+            f"/World/so_arm100/{wrist_cfg['parent_link']}",
+            (wrist_resolution_hw[1], wrist_resolution_hw[0]),  # (W, H)
+            wrist_cfg.get("focal_length"),
+        )
         warm_up(world, camera)
+        warm_up(world, wrist_camera.camera)
         reorder = np.array([robot.dof_names.index(n) for n in isaac_joint_order])
 
         parent_cache: dict[int, tuple] = {}  # parent real episode idx -> (rows, timesteps)
@@ -257,10 +301,12 @@ def main() -> None:
                 rep.orchestrator.step(rt_subframes=1)
 
                 frame = capture_rgb(camera)
+                wrist_frame = capture_tracked_rgb(wrist_camera)
                 real_row = real_ds[rows[t]]
                 dataset.add_frame(
                     {
                         "observation.images.overview": frame[:, :, :3],
+                        "observation.images.wrist": wrist_frame[:, :, :3],
                         "observation.state": real_row["observation.state"],
                         "action": real_row["action"],
                         "episode_source_type_id": np.array([SOURCE_TYPE_ID["SIM_SYNTHETIC"]], dtype=np.int64),

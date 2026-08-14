@@ -138,13 +138,14 @@ def _link_xform(link_path: str):
     return m
 
 
-def create_tracked_camera(position, look_at, link_path: str, resolution=(640, 480)) -> TrackedCamera:
+def create_tracked_camera(position, look_at, link_path: str, resolution=(640, 480),
+                          focal_length: float | None = None) -> TrackedCamera:
     """Create a camera that follows `link_path`, posed in world coordinates as of
     the robot's CURRENT pose. Call after `world.reset()` so the link is at rest.
     """
     import omni.usd
 
-    camera = create_camera(position, look_at, resolution)
+    camera = create_camera(position, look_at, resolution, focal_length)
     stage = omni.usd.get_context().get_stage()
 
     cam_world = _world_xform(stage, camera.prim_path)
