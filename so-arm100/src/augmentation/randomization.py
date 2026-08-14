@@ -22,6 +22,11 @@ class Variation:
     friction_scale: float
     robot_joint_noise_deg: list[float]  # per-arm-joint, same order as robot_mapping.yaml's `joints`
     camera_noise_std: float  # sampled + recorded for provenance; not yet applied, see simulation.yaml
+    # Board pose, added 2026-08-14. Defaults keep the board fixed, so a config
+    # without a `board_position` section behaves exactly as before.
+    board_offset_x: float = 0.0
+    board_offset_y: float = 0.0
+    board_yaw_deg: float = 0.0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -39,6 +44,14 @@ def sample_variation(randomization_cfg: dict, seed: int, num_arm_joints: int = 5
     joint_noise_deg = randomization_cfg.get("robot_initial_joint_noise_deg", 0.0)
     camera_noise_std = randomization_cfg.get("camera_pixel_noise_std", 0.0)
 
+    # Drawn LAST, deliberately. Every draw before this point keeps the position it
+    # had before board randomization existed, so a given seed still reproduces the
+    # exact object/mass/friction/joint variation of the already-generated datasets
+    # (Rule 10). Inserting these earlier would silently invalidate every recorded
+    # seed in data/synthetic/.
+    board_pos_cfg = randomization_cfg.get("board_position")
+    board_yaw_cfg = randomization_cfg.get("board_rotation_deg", {}).get("yaw")
+
     return Variation(
         object_offset_x=float(rng.uniform(*pos_cfg["x"])),
         object_offset_y=float(rng.uniform(*pos_cfg["y"])),
@@ -47,4 +60,7 @@ def sample_variation(randomization_cfg: dict, seed: int, num_arm_joints: int = 5
         friction_scale=float(rng.uniform(friction_cfg["min"], friction_cfg["max"])),
         robot_joint_noise_deg=rng.uniform(-joint_noise_deg, joint_noise_deg, size=num_arm_joints).tolist(),
         camera_noise_std=float(camera_noise_std),
+        board_offset_x=float(rng.uniform(*board_pos_cfg["x"])) if board_pos_cfg else 0.0,
+        board_offset_y=float(rng.uniform(*board_pos_cfg["y"])) if board_pos_cfg else 0.0,
+        board_yaw_deg=float(rng.uniform(*board_yaw_cfg)) if board_yaw_cfg else 0.0,
     )

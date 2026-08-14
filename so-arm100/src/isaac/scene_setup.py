@@ -122,3 +122,137 @@ def apply_variation(obj, material, object_cfg: dict[str, Any], variation) -> Non
     friction = base_friction * variation.friction_scale
     material.set_static_friction(friction)
     material.set_dynamic_friction(friction)
+
+
+def _yaw_quat_wxyz(yaw_deg: float):
+    """Rotation of `yaw_deg` about +Z, as (w, x, y, z)."""
+    import numpy as np
+
+    half = np.deg2rad(yaw_deg) / 2.0
+    return np.array([np.cos(half), 0.0, 0.0, np.sin(half)])
+
+
+def _rotate_vec_wxyz(v, q):
+    """Rotate vector `v` by quaternion `q` (w, x, y, z), via v + 2w(u x v) + 2(u x (u x v))."""
+    import numpy as np
+
+    v = np.asarray(v, dtype=np.float64)
+    w, u = q[0], np.asarray(q[1:], dtype=np.float64)
+    t = np.cross(u, v)
+    return v + 2.0 * w * t + 2.0 * np.cross(u, t)
+
+
+def board_component_pose(board_base_pos, board_base_quat_wxyz, local_offset, local_quat_wxyz, variation=None):
+    """World pose of one board component under a per-episode board variation.
+
+    The board is several prims (the slab plus one visual disc/plate per recess) that
+    must move as one rigid body. Rather than parent them under an Xform and move
+    that -- which would mean a second, unexercised Isaac API on the critical path --
+    each component's world pose is composed here analytically. Pure numpy, no Isaac
+    import, so the geometry is unit-testable on any machine.
+
+    `local_offset` is the component's position in the BOARD's own frame; it gets
+    rotated by the board's total orientation so that recesses stay put on the slab
+    as it yaws, instead of sliding off it.
+    """
+    import numpy as np
+
+    base_pos = np.asarray(board_base_pos, dtype=np.float64)
+    base_quat = np.asarray(board_base_quat_wxyz, dtype=np.float64)
+
+    if variation is None:
+        total_quat = base_quat
+        offset = np.zeros(3)
+    else:
+        total_quat = _quat_multiply_wxyz(_yaw_quat_wxyz(variation.board_yaw_deg), base_quat)
+        offset = np.array([variation.board_offset_x, variation.board_offset_y, 0.0])
+
+    world_pos = base_pos + _rotate_vec_wxyz(local_offset, total_quat) + offset
+    world_quat = _quat_multiply_wxyz(total_quat, np.asarray(local_quat_wxyz, dtype=np.float64))
+    return world_pos, world_quat
+
+
+def add_board(world, scene_cfg: dict[str, Any]):
+    """Add the shape-sorter board -- slab plus one visual marker per recess -- to
+    `world.scene`. Returns a list of (handle, local_offset, local_quat_wxyz) for
+    `apply_board_variation`, or None if the config has no `board` section (older
+    configs stay valid and simply have no board).
+
+    Recesses are Visual* prims: no collider, because motion is replayed rather than
+    re-planned (Rule 4) so nothing is ever actually inserted, and a collider there
+    would only risk spurious contacts with the replayed peg.
+
+    Must be called before `world.reset()`, same as the robot and the table.
+    """
+    import numpy as np
+    from isaacsim.core.api.objects import FixedCuboid, VisualCuboid, VisualCylinder
+
+    board_cfg = scene_cfg.get("board")
+    if board_cfg is None:
+        return None
+
+    base_pos = np.array(board_cfg["position"], dtype=np.float64)
+    base_quat = np.array(_xyzw_to_wxyz(board_cfg.get("rotation", [0.0, 0.0, 0.0, 1.0])))
+    size = board_cfg["size"]
+    identity = np.array([1.0, 0.0, 0.0, 0.0])
+
+    components: list[tuple[Any, Any, Any]] = []
+
+    slab_pos, slab_quat = board_component_pose(base_pos, base_quat, np.zeros(3), identity)
+    slab = world.scene.add(
+        FixedCuboid(
+            prim_path="/World/board_slab",
+            name="board_slab",
+            position=slab_pos.astype(np.float32),
+            orientation=slab_quat.astype(np.float32),
+            scale=np.array(size, dtype=np.float32),
+            color=np.array(board_cfg.get("color", [0.85, 0.72, 0.50]), dtype=np.float32),
+        )
+    )
+    components.append((slab, np.zeros(3), identity))
+
+    disc_thickness = 0.002
+    local_z = size[2] / 2.0 + disc_thickness / 2.0  # sits on the slab's top face
+
+    for rec in board_cfg.get("recesses", []):
+        local_offset = np.array([rec["offset"][0], rec["offset"][1], local_z], dtype=np.float64)
+        pos, quat = board_component_pose(base_pos, base_quat, local_offset, identity)
+        color = np.array(rec.get("color", [0.5, 0.5, 0.5]), dtype=np.float32)
+        common = dict(
+            prim_path=f"/World/board_recess_{rec['id']}",
+            name=f"board_recess_{rec['id']}",
+            position=pos.astype(np.float32),
+            orientation=quat.astype(np.float32),
+            color=color,
+        )
+        if rec["shape"] == "cylinder":
+            handle = world.scene.add(VisualCylinder(radius=rec["radius"], height=disc_thickness, **common))
+        elif rec["shape"] == "cuboid":
+            sx, sy = rec["size"]
+            handle = world.scene.add(VisualCuboid(scale=np.array([sx, sy, disc_thickness], dtype=np.float32), **common))
+        else:
+            raise NotImplementedError(f"Unsupported recess shape {rec['shape']!r} for {rec['id']!r}")
+        components.append((handle, local_offset, identity))
+
+    return components
+
+
+def apply_board_variation(board_components, board_cfg: dict[str, Any], variation) -> None:
+    """Move the whole board -- slab and every recess together -- to the pose sampled
+    for this synthetic episode. No-op when the scene has no board.
+
+    This is the axis the real demonstrations never varied (measured drift across
+    circle_insert_50ep: ~2.5mm), and therefore the one a policy trained on them alone
+    cannot handle. See docs/replan-2026-08-14-camera-confound.md.
+    """
+    import numpy as np
+
+    if not board_components:
+        return
+
+    base_pos = np.array(board_cfg["position"], dtype=np.float64)
+    base_quat = np.array(_xyzw_to_wxyz(board_cfg.get("rotation", [0.0, 0.0, 0.0, 1.0])))
+
+    for handle, local_offset, local_quat in board_components:
+        pos, quat = board_component_pose(base_pos, base_quat, local_offset, local_quat, variation)
+        handle.set_world_pose(position=pos.astype(np.float32), orientation=quat.astype(np.float32))

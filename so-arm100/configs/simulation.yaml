@@ -42,6 +42,37 @@ object:
 # pose/mass/friction and the robot's initial joint pose are randomized per synthetic
 # episode; the commanded joint trajectory is copied verbatim from the parent real
 # episode. See scripts/generate_synthetic.py.
+# The shape-sorter puzzle board -- the insertion TARGET. Absent from this scene
+# until 2026-08-14: the sim had only the table and the peg, so every synthetic
+# episode showed the peg with nothing to insert it into, and board pose could not
+# vary because there was no board.
+#
+# Layout is two columns x three rows of recesses, matching the real board in
+# circle_insert_50ep's overview frames. Dimensions and offsets are eyeballed from
+# that frame at ~0.59 mm/px, NOT measured -- same caveat as `object` below, and it
+# matters more here: once board pose is the variable under test, a systematic
+# geometry error stops being absorbed by training and starts biasing the result.
+# Measure the real board before trusting sim-to-real numbers from this.
+#
+# Recesses are visual-only discs/plates sitting on the slab's top face. They are
+# not modelled as holes: motion is replayed, not re-planned (Rule 4), so nothing
+# is ever physically inserted -- the recesses exist so the RENDERED image shows a
+# board whose appearance and pose move together.
+board:
+  size: [0.20, 0.18, 0.012]     # x, y, z (m)
+  position: [0.22, 0.08, 0.005] # slab CENTER; top face at table_top(-0.001) + 0.012
+  rotation: [0.0, 0.0, 0.0, 1.0]
+  color: [0.85, 0.72, 0.50]     # light birch ply
+  recesses:
+    # offset is (x, y) in the BOARD's own frame, from the slab centre.
+    - {id: pentagon,  offset: [-0.05,  0.055], shape: cylinder, radius: 0.026, color: [0.20, 0.55, 0.35]}
+    - {id: triangle,  offset: [ 0.05,  0.055], shape: cylinder, radius: 0.026, color: [0.90, 0.50, 0.25]}
+    - {id: square,    offset: [-0.05,  0.000], shape: cuboid,   size: [0.05, 0.05], color: [0.88, 0.42, 0.35]}
+    - {id: rectangle, offset: [ 0.05,  0.000], shape: cuboid,   size: [0.06, 0.04], color: [0.20, 0.35, 0.70]}
+    - {id: circle,    offset: [-0.05, -0.055], shape: cylinder, radius: 0.027, color: [0.20, 0.55, 0.45]}
+    - {id: diamond,   offset: [ 0.05, -0.055], shape: cuboid,   size: [0.05, 0.05], color: [0.45, 0.25, 0.55]}
+
+
 randomization:
   object_position:
     x: [-0.03, 0.03]
@@ -54,6 +85,18 @@ randomization:
   friction_scale:
     min: 0.8
     max: 1.2
+  # Board pose. This is the axis that matters for deployment: the real board gets
+  # nudged between sessions, and a policy trained with it fixed memorises its
+  # location instead of locating it. Measured drift ACROSS circle_insert_50ep was
+  # only ~2.5mm (so the real demos carry no signal to learn this from), while the
+  # board was found ~19mm out of place on 2026-08-14. Ranges below deliberately
+  # exceed that, so 19mm sits comfortably inside the training distribution rather
+  # than at its edge.
+  board_position:
+    x: [-0.03, 0.03]
+    y: [-0.03, 0.03]
+  board_rotation_deg:
+    yaw: [-10, 10]
   # Not in AGENTS_NEW.md's example block, but Sec 16's prose also lists these two:
   robot_initial_joint_noise_deg: 3.0   # +/- jitter (per arm joint) applied before the
                                         # settle-to-frame-0 phase, not to the replay itself

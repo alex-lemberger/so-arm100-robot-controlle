@@ -67,3 +67,4 @@ Thumbs.db
 
 # Alignment overlays are throwaway diagnostics, not artefacts.
 so-arm100/board_alignment.png
+so-arm100/smoke_board_isaac_result.txt

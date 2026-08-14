@@ -87,7 +87,13 @@ def main() -> None:
     from bridge.trajectory_converter import convert_episode, load_robot_mapping  # noqa: E402
     from bridge.validation import validate_replay  # noqa: E402
     from isaac.replay_loop import run_replay, settle_to_first_frame  # noqa: E402
-    from isaac.scene_setup import add_table_and_object, apply_variation, load_scene_config  # noqa: E402
+    from isaac.scene_setup import (  # noqa: E402
+        add_board,
+        add_table_and_object,
+        apply_board_variation,
+        apply_variation,
+        load_scene_config,
+    )
 
     cfg = yaml.safe_load(Path(args.config).read_text())
     usd_path = cfg["isaac_robot"]["asset_path"]
@@ -104,6 +110,7 @@ def main() -> None:
     add_reference_to_stage(usd_path=usd_path, prim_path="/World/so_arm100")
     robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
     scene_object, scene_material = add_table_and_object(world, scene_cfg)
+    board_components = add_board(world, scene_cfg)
 
     world.reset()
     robot.initialize()
@@ -130,6 +137,8 @@ def main() -> None:
 
             world.reset()
             apply_variation(scene_object, scene_material, scene_cfg["object"], variation)
+            if board_components:
+                apply_board_variation(board_components, scene_cfg["board"], variation)
 
             # Randomize where the arm starts from (Sec 16's "robot initial joint
             # position"), then settle to frame 0 as usual -- this perturbs the
@@ -170,7 +179,9 @@ def main() -> None:
             print(
                 f"[{i + 1}/{args.num_synthetic}] {episode_id} <- parent {parent_ep}: "
                 f"mean EE error {result['mean_ee_error_m'] * 1000:.2f}mm, "
-                f"obj offset ({variation.object_offset_x * 1000:.1f}, {variation.object_offset_y * 1000:.1f})mm"
+                f"obj offset ({variation.object_offset_x * 1000:.1f}, {variation.object_offset_y * 1000:.1f})mm "
+                f"board ({variation.board_offset_x * 1000:+.1f}, {variation.board_offset_y * 1000:+.1f})mm "
+                f"{variation.board_yaw_deg:+.1f}deg"
             )
         except Exception as exc:  # noqa: BLE001 -- isolate one bad randomized sample from the whole batch
             manifest.append(
