@@ -74,14 +74,12 @@ between the two machines.
    `transformers==5.5.4` is pulled in by the `smolvla` extra automatically; the explicit pin is
    kept here as a guard.
 
-6. **Transfer the dataset and strip macOS metadata files.** `data/local/lerobot_dataset/` is gitignored
-   (never pushed) and is 561 MB — copy it over via USB stick, network
-   share, or a cloud drive, whichever's easiest. Put it anywhere on the
-   Windows box; `--dataset.root` in the training command points at it
-   directly, so the path doesn't need to match the Mac's layout. Also
-   copy the source `data/local/episodes/` only if you want it for
-   reference — it's not needed for training itself (only the already-built
-   `lerobot_dataset/` is).
+6. **Transfer the dataset and strip macOS metadata files.** `so-arm100/data/lerobot_dataset/` is ~300 MB
+   (55 episodes, ~100 MB parquet + ~200 MB video) — copy it over via USB
+   stick, network share, or a cloud drive, whichever's easiest. Put it
+   anywhere on the Windows box; `--dataset.root` in the training command
+   points at it directly, so the path doesn't need to match the Mac's
+   layout.
 
    After copying, delete macOS AppleDouble metadata files (`._*`) that
    macOS silently creates alongside every file. They're invisible on Mac
@@ -89,7 +87,7 @@ between the two machines.
    "Parquet magic bytes not found":
 
    ```powershell
-   Get-ChildItem -Recurse -Force data/local/lerobot_dataset `
+   Get-ChildItem -Recurse -Force so-arm100\data\lerobot_dataset `
      | Where-Object { $_.Name -like "._*" } `
      | Remove-Item -Force -Confirm:$false
    ```

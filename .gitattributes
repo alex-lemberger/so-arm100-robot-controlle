@@ -1,0 +1,4 @@
+# The working tree lives on an NTFS drive shared with a Windows dual-boot,
+# so Windows-side tooling flips files to CRLF. Normalise on the way into the
+# repo; without this the real diff hides behind hundreds of phantom changes.
+* text=auto eol=lf

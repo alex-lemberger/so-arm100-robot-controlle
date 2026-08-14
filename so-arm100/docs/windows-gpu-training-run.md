@@ -134,12 +134,9 @@ recording more demonstrations, biased toward varying the piece's starting
 position/rotation, and retraining from scratch (not resumed from the
 30,000-step checkpoint).
 
-`data/local/lerobot_dataset/` on the Mac has been rebuilt from 29 → 55
-episodes (45,782 frames, 1.3 GB). **Before running the command below,
-re-copy this dataset to the Windows box** (same USB/network/cloud method as
-before) over whatever 29-episode copy is already there, and re-run the
-AppleDouble-stripping step from `windows-gpu-training-setup.md` — the file
-count and hashes changed, so the old copy is stale.
+`data/lerobot_dataset/` has been rebuilt from 29 → 55 episodes (45,782
+frames, ~300 MB) and is already present on this machine. Dataset is ready
+— no transfer needed.
 
 Same full-run command as above, with a distinct `--output_dir`/`--job_name`
 so it doesn't overwrite the existing `smolvla_shape_sort_30000` checkpoints:
@@ -147,7 +144,7 @@ so it doesn't overwrite the existing `smolvla_shape_sort_30000` checkpoints:
 ```powershell
 .venv-lerobot\Scripts\lerobot-train `
   --dataset.repo_id=local/shape_sort_teleop `
-  --dataset.root=data/local/lerobot_dataset `
+  --dataset.root=data/lerobot_dataset `
   --dataset.video_backend=pyav `
   --dataset.eval_split=0.15 `
   --policy.path=lerobot/smolvla_base `

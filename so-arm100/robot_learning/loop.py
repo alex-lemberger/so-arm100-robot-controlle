@@ -36,16 +36,32 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 CONFIG = {
-    # ~/lerobot/.venv is the environment proven against this hardware.
+    # ~/lerobot/.venv is the environment proven against this hardware on Mac;
+    # on Linux this resolves through a symlink to /usr/local/bin inside
+    # lerobot-train:latest (see Dockerfile.lerobot) instead of a real venv.
     "venv_bin": Path.home() / "lerobot" / ".venv" / "bin",
-    "follower": {"type": "so100_follower", "port": "/dev/cu.usbmodem5AE60582701", "id": "white"},
-    "leader": {"type": "so100_leader", "port": "/dev/cu.usbmodem5B140329561", "id": "black_20260801"},
-    # Verified 2026-08-08 with `lerobot-find-cameras opencv`. Indices are NOT
-    # stable across reboots or USB re-plugs -- re-run the probe if a recording
-    # looks wrong. index 2 is the MacBook FaceTime camera, index 3 is dead.
+    # Re-detected on Linux 2026-08-11 after the physical move (see
+    # docs/linux-hardware-setup-2026-08-11.md) -- ports/indices are NOT
+    # portable across machines. Mac was /dev/cu.usbmodem5AE60582701 (follower)
+    # / /dev/cu.usbmodem5B140329561 (leader).
+    # CORRECTED 2026-08-12: enumeration flipped since the 08-11 check (USB
+    # replug/reboot reorders ttyACM assignment) -- an eval run hit an Overload
+    # error while trying to disable torque through what CONFIG called the
+    # follower, and the user confirmed by feel it was actually the physical
+    # leader. Re-verified by unplugging the follower's cable alone: /dev/ttyACM1
+    # disappeared, /dev/ttyACM0 remained -- so ttyACM0 is the leader, ttyACM1
+    # is the follower. This mapping is NOT stable across reboots/replugs;
+    # re-verify with the same unplug test if ports are ever in doubt.
+    "follower": {"type": "so100_follower", "port": "/dev/ttyACM1", "id": "white"},
+    "leader": {"type": "so100_leader", "port": "/dev/ttyACM0", "id": "black_20260801"},
+    # Verified 2026-08-11 via lerobot-find-cameras + visual match (Mac indices
+    # were overview=1, wrist=0 -- also not portable).
+    # fourcc=MJPG: uncompressed YUYV at 1280x720 can't sustain 30fps over USB
+    # (maxes out at 10fps) -- MJPG compression is required to hit the requested
+    # fps at this resolution. Confirmed 2026-08-12 on this hardware.
     "cameras": {
-        "overview": {"type": "opencv", "index_or_path": 1, "width": 1280, "height": 720, "fps": 30},
-        "wrist": {"type": "opencv", "index_or_path": 0, "width": 1280, "height": 720, "fps": 30},
+        "overview": {"type": "opencv", "index_or_path": "/dev/video0", "width": 1280, "height": 720, "fps": 30, "fourcc": "MJPG"},
+        "wrist": {"type": "opencv", "index_or_path": "/dev/video2", "width": 1280, "height": 720, "fps": 30, "fourcc": "MJPG"},
     },
     "task": "Insert the circle piece into its matching hole.",
     # Rollout only. NOT used while recording: lerobot-record logs the
