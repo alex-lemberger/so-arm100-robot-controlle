@@ -26,10 +26,16 @@ object:
   shape: cylinder
   radius: 0.02   # ~4cm diameter, eyeballed against the gripper jaw width in frame 0
   height: 0.03
-  # ~0.19m from robot base (sqrt(0.18^2+0.05^2)), inside the ~0.23-0.30m EE reach
-  # cluster measured during Stage 1 replay validation -- picked to be reachable,
-  # not read off the real board layout yet.
-  position: [0.18, -0.05, 0.014]  # z = table top (-0.001) + half height
+  # PROVISIONAL, NOT MEASURED. The old [0.18, -0.05] was chosen when the board's
+  # position was a guess; with the board now measured at [0.152, 0, 0.005] that
+  # point falls INSIDE the board's footprint (x 0.065-0.239, y -0.087-0.087) and
+  # overlaps the slab in z as well, so the peg would spawn interpenetrating the
+  # board. Moved clear, keeping the same ~0.19m reach from the base
+  # (sqrt(0.14^2+0.13^2) = 0.191m) and sitting off the board's near-right corner
+  # roughly as it does in docs/reference/board_reference_demo.png.
+  # Replace with a real measurement of where the peg is actually placed --
+  # tests/test_board_randomization.py asserts only that it stays clear of the board.
+  position: [0.14, -0.13, 0.014]  # z = table top (-0.001) + half height
   rotation: [0.0, 0.0, 0.0, 1.0]  # x, y, z, w (identity) -- USD/ROS convention
   mass: 0.02   # kg, light wooden peg
   base_friction: 0.5   # both static and dynamic; Isaac default-ish, not measured on real wood/paper
@@ -78,7 +84,11 @@ object:
 # an estimate, and it is the remaining geometry error on the sim-to-real path.
 board:
   size: [0.174, 0.174, 0.012]
-  position: [0.22, 0.08, 0.005]        # slab CENTRE; top face at table_top(-0.001) + 0.012
+  # MEASURED 2026-08-14: the board is centred on the robot and its near ("bottom")
+  # edge is 65mm from the robot base, so the centre sits 65 + 174/2 = 152mm out
+  # along +x with no lateral offset. Assumes the 65mm was measured to the base
+  # origin; if it was to the front of the base plate, add that plate's half-depth.
+  position: [0.152, 0.0, 0.005]        # slab CENTRE; top face at table_top(-0.001) + 0.012
   rotation: [0.0, 0.0, -0.70710678, 0.70710678]  # x, y, z, w -- -90 deg about +Z, see note above
   # (normalised on read in board_component_pose, so a rounded 0.7071 would not
   # silently rescale the board -- but keep it exact here anyway)

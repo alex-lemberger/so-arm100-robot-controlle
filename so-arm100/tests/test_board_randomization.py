@@ -144,6 +144,35 @@ def test_no_variation_is_identity():
     return ok
 
 
+def test_peg_does_not_intersect_the_board():
+    """The peg must spawn clear of the board slab.
+
+    This is a real bug that appeared the moment the board position was measured:
+    the peg's long-standing [0.18, -0.05] guess landed inside the newly-measured
+    footprint and overlapped it in z, which would spawn the two interpenetrating.
+    Both positions are independent estimates of the same physical setup, so they
+    can drift apart again -- hence a guard rather than a one-off fix.
+    """
+    board, obj = CFG["board"], CFG["object"]
+    bx, by, bz = board["position"]
+    hx, hy, hz = [v / 2 for v in board["size"]]
+    px, py, pz = obj["position"]
+    r, h = obj["radius"], obj["height"]
+
+    xy_clear = (
+        px + r < bx - hx or px - r > bx + hx
+        or py + r < by - hy or py - r > by + hy
+    )
+    z_clear = (pz + h / 2 < bz - hz) or (pz - h / 2 > bz + hz)
+    ok = check("peg spawns clear of the board (in xy or above/below it)",
+               xy_clear or z_clear,
+               f"peg ({px}, {py}) r={r} vs board x[{bx-hx:.3f},{bx+hx:.3f}] "
+               f"y[{by-hy:.3f},{by+hy:.3f}]")
+    reach = (px**2 + py**2) ** 0.5
+    ok &= check(f"peg still within arm reach ({reach:.3f}m)", 0.10 < reach < 0.32)
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (
@@ -152,6 +181,7 @@ if __name__ == "__main__":
         test_recesses_stay_on_the_slab_under_yaw,
         test_translation_moves_everything_equally,
         test_no_variation_is_identity,
+        test_peg_does_not_intersect_the_board,
     ):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()
