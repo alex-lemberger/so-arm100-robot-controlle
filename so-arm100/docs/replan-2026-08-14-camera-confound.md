@@ -122,3 +122,70 @@ a two-camera policy.
 3. `./verify_ports.sh` — not yet run since the reboot.
 4. Leader calibration (`black_20260801`) — fix attempted 08-14, never verified.
 5. Stale root-owned `data/local/datasets/rollout_run_d` — remove.
+
+---
+
+# R0 result, 2026-08-14: 0/10 — but the failure moved forward two phases
+
+| ep | grasp | transport | insert |
+|---|---|---|---|
+| 2, 3, 4 | ✓ | ✓ | ✗ |
+| 5, 6 | ✗ | — | — |
+| 7 | ✓ | ✓ | ✗ (closest) |
+| 8, 9, 10 | ✗ | — | — |
+
+Strict success **0/10**. Grasp 4/9. Insert 0/4 attempts. (Episode 1 unrecorded.)
+
+## What 0/10 does and does not mean
+
+The pre-registered reading of 0/10 was "the fault is in the eval path or the
+hardware — stop." That reading does not survive the phase data. A broken eval
+path does not produce a policy that repeatedly grasps a piece and carries it to
+the board. The harness is sound and the checkpoint runs.
+
+**The camera hypothesis is supported.** This two-camera policy transported the
+piece repeatedly. Single-camera A/B/C never transported once in 40 combined
+episodes. That is a real behavioural difference attributable to the wrist view.
+
+**But 0/10 against this same checkpoint's historical 3/10 is a real
+regression**, and the cause appears to be physical, not a matter of data.
+
+## The board moved
+
+Comparing an episode-start overview frame from `circle_insert_50ep` (the demos
+this checkpoint trained on) against one from `rollout_baseline_2cam_r0`:
+
+```
+demo  green-feature centroid: (534.8, 343.4)
+today green-feature centroid: (565.7, 337.5)
+OFFSET dx=+30.9px dy=-5.9px  |d|=31.5px  (~19 mm)
+```
+
+A 50/50 blend of the two frames shows every board feature doubled, and the
+doubling **grows toward the right edge** — so the board is rotated a few degrees
+as well as translated. The background (towel, cutting mat) is unchanged, so the
+workspace moved, not the camera. This is consistent with the arm's physical
+relocation on 2026-08-11; the demos predate the move.
+
+~19 mm plus rotation is fatal for peg-in-recess seating and largely harmless for
+grasping (the policy locates the piece visually) and for transport (coarse).
+That matches the observed failure pattern exactly.
+
+**This also means A/B/C's 0/20 has two confounds, not one** — missing wrist
+camera *and* a displaced board. Their result cannot be attributed to the camera
+alone, and neither can it be used as a baseline for anything.
+
+## Immediate next step, before any retraining
+
+`./check_alignment.sh` overlays the live overview camera on
+`docs/reference/board_reference_demo.png` and prints the offset in px and mm.
+Nudge the board until it reads under ~5 px, then re-run
+`./run_eval_baseline_2cam.sh` with a fresh tag.
+
+If insertion starts working on a realigned board, R0 has passed, the harness and
+hardware are cleared, and R1 proceeds with a trustworthy baseline. If it still
+fails at 0 px offset, the board is not the explanation and the next suspect is
+servo condition (the 5.2 V reading) or the grasp reliability drop.
+
+**Do not retrain anything until the board is realigned.** Every dataset rebuilt
+or policy trained against the current board pose would bake in the drift.
