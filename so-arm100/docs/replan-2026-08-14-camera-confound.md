@@ -189,3 +189,67 @@ servo condition (the 5.2 V reading) or the grasp reliability drop.
 
 **Do not retrain anything until the board is realigned.** Every dataset rebuilt
 or policy trained against the current board pose would bake in the drift.
+
+---
+
+# Board pose belongs in the training distribution (user's point, 2026-08-14)
+
+The board moving slightly is not noise to be eliminated — it is the deployment
+condition. A policy that only works with the board at one pose is a scripted
+trajectory with extra steps. Robustness to a shifted board should be a
+first-class requirement.
+
+## Measured: it was never in the training distribution
+
+Board displacement across `circle_insert_50ep`, phase-correlated against the
+first episode video:
+
+| file | offset |
+|---|---|
+| file-000 | 0.0 px (reference) |
+| file-001 | 3.7 px |
+| file-002 | 3.9 px |
+| file-003 | 4.3 px |
+
+Max 4.3 px ≈ **2.5 mm**, and monotonic — slow creep across the recording
+session, not deliberate variation. The board was effectively fixed, so no BC
+policy trained on this data can be board-pose invariant. Tonight's ~16 mm
+misalignment is 6-8x anything it ever saw.
+
+## The synthetic pipeline has the same blind spot
+
+`src/augmentation/randomization.py` samples `object_offset_x/y`, `yaw_deg`,
+`mass_scale`, `friction_scale`, `robot_initial_joint_noise_deg`,
+`camera_pixel_noise_std`. `scene_setup.apply_variation` moves and retunes the
+*piece* only. **Board and table pose are never varied.**
+
+So Dataset C's 100 synthetic episodes diversified only the axis the real demos
+already varied, and inherited the fixed-board limitation wholesale. That is a
+significant part of why C was never going to beat B on anything that matters.
+
+## This gives synthetic augmentation a defensible thesis
+
+"Fewer real demos for the same task" is weak — the rebuttal is "just record 40
+more demos," which is cheaper than an Isaac pipeline. Board-pose invariance is
+not: recording it for real means physically repositioning the board dozens of
+times, while in sim it is one addition to the randomizer.
+
+Revised primary claim, replacing the §21 framing:
+
+> Real demos with a fixed board, plus synthetic episodes with randomized board
+> pose, yield a policy that tolerates a displaced board — which the real data
+> alone cannot produce at any episode count.
+
+Directly testable: with the board aligned both policies should work; displaced
+15-25 mm, only the synthetic-augmented one should survive. Evaluate across a
+grid of board offsets rather than a single pose.
+
+## Consequences for the plan
+
+- Add board/table pose to `randomization.py` + `apply_variation` (translation in
+  x/y and yaw). This becomes R2's main purpose, not just the wrist camera.
+- Evaluation protocol gains a board-offset axis; §20's "randomize object
+  position" should read "randomize object position *and board pose*."
+- R0 is unaffected: it is a reproduction control and must run at the demos' own
+  board pose. Robustness testing needs a policy trained for it, which does not
+  exist yet.
