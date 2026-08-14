@@ -253,3 +253,36 @@ grid of board offsets rather than a single pose.
 - R0 is unaffected: it is a reproduction control and must run at the demos' own
   board pose. Robustness testing needs a policy trained for it, which does not
   exist yet.
+
+
+---
+
+# Correction, 2026-08-14: R0 was run against the wrong checkpoint
+
+The 3/10 baseline is
+`outputs/train/smolvla_circle_insert_50ep_trimmed_20000/checkpoints/020000` --
+the trimmed, batch-32, 20,000-step run. `docs/windows-gpu-training-run-grasp-v1.md`
+states it plainly: "The trimmed batch-32 checkpoint scores 3/10 on hardware --
+the project's first completed insertions."
+
+Every R0 attempt on 2026-08-14 used
+`smolvla_circle_insert_50ep_30000/checkpoints/030000` instead: a different run,
+on the untrimmed dataset, 30,000 steps at batch 8, with **no established
+hardware score**. Both happen to be two-camera, so the camera reasoning in this
+document stands; the checkpoint identification did not. It was an inference
+written into this doc and RUNBOOK.md as if it were a recorded fact.
+
+| checkpoint | dataset | steps | batch | hardware |
+|---|---|---|---|---|
+| `..._trimmed_20000/020000` | `circle_insert_50ep_trimmed` | 20000 | 32 | **3/10** |
+| `..._50ep_30000/030000` | `circle_insert_50ep` | 30000 | 8 | unknown |
+
+**Consequence: the 0/10 and 2/10 results from 2026-08-14 are not evidence about
+the harness, the hardware, the board, or the peg.** They measure an unbenchmarked
+checkpoint. The board and peg misalignments found along the way were real and are
+now fixed, and the diagnostics built (alignment, servo scan, calibration check)
+all stand -- but R0 itself has still never been run.
+
+R0 remains outstanding, now against the correct checkpoint. Everything else is
+ready for it: board 6.6px (~4mm), peg 10.0px (~6mm), follower calibration matches
+white.json, all 12 servos healthy at 24-30C.

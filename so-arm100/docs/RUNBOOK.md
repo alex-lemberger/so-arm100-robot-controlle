@@ -69,7 +69,14 @@ recalibration and an invalid eval result).
 **Every policy that has ever worked on this task used TWO cameras
 (`observation.images.overview` + `observation.images.wrist`).** The only
 checkpoint with a nonzero hardware success rate
-(`smolvla_circle_insert_50ep_30000`, 3/10) is two-camera.
+(3/10) is two-camera. **That checkpoint is
+`outputs/train/smolvla_circle_insert_50ep_trimmed_20000/checkpoints/020000` --
+the TRIMMED, batch-32, 20k-step run** (docs/windows-gpu-training-run-grasp-v1.md:
+"The trimmed batch-32 checkpoint scores 3/10 on hardware"). It is NOT
+`smolvla_circle_insert_50ep_30000`, which is a different run (untrimmed dataset,
+30k steps, batch 8) with no established hardware score. Three eval sessions on
+2026-08-14 were spent on that wrong checkpoint; its 0/10 and 2/10 results are
+not evidence about the harness, the hardware, or the board.
 
 Datasets A/B/C (`circle_grasp_v1_real10`, `circle_grasp_v1_real50`,
 `circle_grasp_v1_mixed_10r_100s`) and `grasp_v1_dagger1` are
