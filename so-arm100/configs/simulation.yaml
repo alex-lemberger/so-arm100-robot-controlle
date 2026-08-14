@@ -72,24 +72,38 @@ object:
 # nothing is ever physically inserted, and a collider there would only risk
 # spurious contact with the replayed peg.
 #
-# `rotation` encodes the 90 degree offset between the drawing's orientation and how
-# the board actually sits in the overview frame. Confirmed, not just reasoned: with
-# it applied, tests/smoke_board_isaac.py reports the recesses resting in two columns
-# of three -- pentagon/square/circle at x~0.17 and triangle/rectangle/diamond at
-# x~0.25, top to bottom -- which is exactly the arrangement in
-# docs/reference/board_reference_demo.png. The drawing's own 3x2 layout only becomes
-# the photo's 2x3 under this rotation, and only with this sign.
+# `rotation` is derived from docs/reference/robot-base.png, a top-down view with the
+# robot at the bottom and the board at the top. In that view the board carries the
+# drawing's own layout unrotated (triangle top-left, rectangle top-centre, diamond
+# top-right; pentagon bottom-left, square bottom-centre, circle bottom-right).
+# Looking down -Z with screen-up = world -y, screen-right works out to world -x, so
+# the drawing's +x maps to world -x and its +y to world -y: a 180 degree turn about
+# Z. Under it the circle lands near-right of the board as the photo shows.
 #
-# STILL UNMEASURED: where the board sits relative to the robot base. `position` is
-# an estimate, and it is the remaining geometry error on the sim-to-real path.
+# (An earlier revision used -90 deg. That was fitted to the overview frame while the
+# board was wrongly placed at +x. The overview camera views the board from roughly
+# 90 degrees off this top-down shot, which is why the same board reads as 3x2 in one
+# and 2x3 in the other; robot-base.png is the one that shows the robot, so it is the
+# one that fixes orientation relative to the robot.)
 board:
   size: [0.174, 0.174, 0.012]
-  # MEASURED 2026-08-14: the board is centred on the robot and its near ("bottom")
-  # edge is 65mm from the robot base, so the centre sits 65 + 174/2 = 152mm out
-  # along +x with no lateral offset. Assumes the 65mm was measured to the base
-  # origin; if it was to the front of the base plate, add that plate's half-depth.
-  position: [0.152, 0.0, 0.005]        # slab CENTRE; top face at table_top(-0.001) + 0.012
-  rotation: [0.0, 0.0, -0.70710678, 0.70710678]  # x, y, z, w -- -90 deg about +Z, see note above
+  # MEASURED 2026-08-14 from docs/reference/robot-base.png: the board is centred
+  # on the robot and its near edge is 65mm from the FRONT EDGE of the robot's
+  # base (not from the base origin -- the drawing's dimension line ends at the
+  # base plate, and its 90mm matches the USD base's 95.9mm depth).
+  #
+  # THE ROBOT FACES -Y, not +x. Probed from the USD directly: at zero pose the
+  # gripper sits at y in [-0.257, -0.135] and the base spans y in [-0.071,
+  # +0.025], so the base's front edge is y=-0.071. Hence
+  #   centre y = -0.071 - 0.065 - 0.174/2 = -0.223,  centre x = 0 (centred).
+  # An earlier version of this file put the board at +x, which was off the
+  # robot's side rather than in front of it.
+  #
+  # Corroborated by reach: the six recesses land 0.18-0.27m from the base, inside
+  # the 0.23-0.30m EE cluster measured during Stage 1 replay validation. The old
+  # placement did not.
+  position: [0.0, -0.223, 0.005]       # slab CENTRE; top face at table_top(-0.001) + 0.012
+  rotation: [0.0, 0.0, 1.0, 0.0]       # x, y, z, w -- 180 deg about +Z, see note above
   # (normalised on read in board_component_pose, so a rounded 0.7071 would not
   # silently rescale the board -- but keep it exact here anyway)
   color: [0.85, 0.72, 0.50]            # light birch ply
