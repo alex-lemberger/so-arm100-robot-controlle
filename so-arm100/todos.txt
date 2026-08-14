@@ -1,0 +1,19 @@
+ Once all three finish, the sequence is:
+
+  Still on Windows (before rebooting):
+  - Fill in the results table in the handover doc with final train loss, eval loss, and wall time for A, B, C
+  - Write the Windows→Linux handover doc
+
+  Boot into Linux, then in order:
+
+  1. Build the eval Docker image — this is the blocker for everything else. Python 3.12, lerobot[smolvla]==0.6.1,
+  transformers==5.5.4, CUDA torch, plus the hardware bits from real-robot:latest (pyserial, Feetech SDK, OpenCV, device
+  passthrough). Nothing below can happen until this exists.
+  2. Run real-hardware eval on all three checkpoints — robot_learning/loop.py eval against each of A/B/C's
+  030000/pretrained_model. Measure success rate on the circle grasp task. Fill in the last column of the results table —
+  that's the actual answer to the research question.
+  3. Write the LPWP M1–M4 implementation plan — read the actual source files while writing it so file names and
+  interfaces are accurate, then start executing milestone by milestone.
+
+  The Docker image build is probably 1–2 hours of work (writing the Dockerfile, resolving CUDA/torch pin conflicts,
+  testing it loads a checkpoint). That's the first thing to tackle and the one most likely to have surprises.

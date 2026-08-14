@@ -1,0 +1,27 @@
+ To build it once you're on Linux:
+
+  cd /path/to/so-arm100
+  docker build -f Dockerfile.lerobot -t lerobot-train:latest .
+
+  Then training looks like:
+
+  docker run --rm --gpus all \
+    -v "$(pwd):$(pwd)" -w "$(pwd)" \
+    lerobot-train:latest \
+    lerobot-train --dataset.repo_id=... [rest of flags]
+
+  And eval adds device passthrough:
+
+  docker run --rm --gpus all -it \
+    --device=/dev/ttyACM0 --device=/dev/ttyACM1 \
+    --device=/dev/video0 --device=/dev/video2 \
+    -v "$HOME/.cache/huggingface/lerobot/calibration:/root/.cache/huggingface/lerobot/calibration" \
+    -v "$(pwd):$(pwd)" -w "$(pwd)" \
+    lerobot-train:latest \
+    python robot_learning/loop.py eval --checkpoint ...
+
+
+
+
+cd /media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100
+  docker build -f Dockerfile.lerobot -t lerobot-train:latest

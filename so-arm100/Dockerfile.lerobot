@@ -1,0 +1,52 @@
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+# Python 3.12 — Ubuntu 22.04 ships 3.10, which lerobot 0.6.1 rejects at install time
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.12 \
+        python3.12-venv \
+        python3.12-dev \
+        python3-pip \
+        build-essential \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+ && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+ && python -m ensurepip --upgrade \
+ && pip install --upgrade pip
+
+# Install PyTorch before lerobot — otherwise lerobot's solver may pull a CPU-only build
+RUN pip install --no-cache-dir \
+    torch==2.11.0 \
+    torchvision==0.26.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# lerobot extras: smolvla (VLM backbone + LoRA), dataset (parquet/video/av),
+# feetech (servo SDK + pyserial + deepdiff, correctly version-pinned by lerobot itself
+# rather than guessed — feetech-servo-sdk is the PyPI name, deepdiff is required at
+# runtime by FeetechMotorsBus but isn't pulled in by smolvla/dataset alone),
+# hardware (pynput, for the eval loop's keyboard controls)
+RUN pip install --no-cache-dir "lerobot[smolvla,dataset,feetech,hardware]==0.6.1"
+
+# smolvla pulls transformers as a dep but may not land on exactly 5.5.4 — re-pin
+RUN pip install --no-cache-dir transformers==5.5.4
+
+# opencv-python-headless: camera capture without a display server (not a lerobot extra)
+RUN pip install --no-cache-dir opencv-python-headless
+
+# robot_learning/loop.py hardcodes venv_bin = ~/lerobot/.venv/bin (built for a native
+# venv setup); this image installs system-wide via pip, so console scripts land in
+# /usr/local/bin instead. Symlink the expected path there rather than patching the script.
+RUN mkdir -p /root/lerobot/.venv && ln -s /usr/local/bin /root/lerobot/.venv/bin
+
+WORKDIR /workspace

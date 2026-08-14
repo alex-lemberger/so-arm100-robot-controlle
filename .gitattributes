@@ -2,3 +2,6 @@
 # so Windows-side tooling flips files to CRLF. Normalise on the way into the
 # repo; without this the real diff hides behind hundreds of phantom changes.
 * text=auto eol=lf
+
+# PowerShell helpers only ever run on the Windows side; keep them CRLF.
+*.ps1 text eol=crlf

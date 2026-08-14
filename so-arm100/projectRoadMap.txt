@@ -1,0 +1,744 @@
+# Physical AI Learning Lab
+
+## Agentic Coding Implementation Brief
+
+### 1. Project Goal
+
+Build an experimental robotics learning pipeline around a real dual-arm LeRobot setup and its existing digital twin in NVIDIA Isaac Sim / Isaac Lab.
+
+The project has two related goals.
+
+**Goal A — Efficient Robot Learning**
+
+Reduce the amount of real-world teleoperation data required to teach manipulation skills.
+
+Instead of recording 50–100 nearly identical real-world demonstrations for every task, create a workflow where a small number of high-quality human demonstrations can be replayed, augmented and multiplied in simulation.
+
+The target workflow is:
+
+**Real Demonstration → Simulation → Synthetic Experience → Policy Training → Real Robot Evaluation → Failure Correction**
+
+**Goal B — Sensory-Cognitive Layer Research**
+
+Investigate whether an explicit representation of physical state can improve sample efficiency.
+
+The hypothesis is:
+
+> A robot policy may require fewer demonstrations if it receives an explicit structured representation of relevant physical relationships in addition to raw camera images and joint states.
+
+The initial implementation should remain deliberately simple and measurable.
+
+---
+
+# 2. Core Principle
+
+The system should separate three sources of learning:
+
+**Human demonstrations teach intent.**
+
+Humans demonstrate what successful behavior looks like.
+
+**Simulation teaches variation and physics.**
+
+Isaac Sim / Isaac Lab generates many variations of a small number of demonstrations.
+
+**Reality identifies the simulation gap.**
+
+The physical robot is used to discover situations where the learned policy fails.
+
+Those failures become new high-value training examples.
+
+The resulting loop is:
+
+Human Demonstration
+→ Dataset
+→ Isaac Simulation
+→ Synthetic Dataset
+→ Policy Training
+→ Physical Robot
+→ Failure Detection
+→ Human Correction
+→ Retraining
+
+Do not treat teleoperation as the primary mechanism for generating large datasets.
+
+Teleoperation should primarily provide seed demonstrations and corrections.
+
+---
+
+# 3. Existing System
+
+The physical platform consists of two LeRobot-compatible full robotic arms.
+
+The robot can already be controlled through teleoperation.
+
+A corresponding robot model / digital twin already exists in Isaac Sim.
+
+The implementation should therefore reuse the existing robot model rather than creating a new robot description unless technical validation shows that the model is unsuitable.
+
+The development environment should assume Linux for Isaac Sim / Isaac Lab.
+
+---
+
+# 4. Phase One — Real Demonstration Capture
+
+Use the existing LeRobot teleoperation pipeline.
+
+Record a small set of deliberately varied demonstrations.
+
+Initial target:
+
+**10–20 demonstrations per task.**
+
+Do not attempt to record 100 identical demonstrations.
+
+Variation should be intentional.
+
+For example:
+
+* slightly different object positions
+* different object orientations
+* slightly different grasp approaches
+* different motion speeds
+* different starting arm configurations
+
+For every timestep preserve as much information as available:
+
+* timestamps
+* joint positions
+* joint velocities
+* commanded actions
+* gripper state
+* camera frames
+* task identifier
+* episode identifier
+
+Do not prematurely discard raw data.
+
+The raw demonstration dataset should remain immutable.
+
+---
+
+# 5. Dataset Bridge
+
+Create a dedicated software module called:
+
+**Dataset Bridge**
+
+Its purpose is to translate between the real LeRobot dataset and the Isaac simulation representation.
+
+Conceptually:
+
+LeRobot Dataset
+→ Dataset Bridge
+→ Isaac-compatible demonstration
+
+The bridge must handle:
+
+* joint-name mapping
+* joint ordering
+* joint direction
+* zero-position offsets
+* units
+* joint limits
+* gripper mapping
+* timestamps
+* control frequency
+* coordinate frames
+
+The bridge should be configuration-driven.
+
+Do not hard-code robot-specific mappings throughout the codebase.
+
+Create a robot mapping configuration describing the relationship between the physical robot and the Isaac articulation.
+
+---
+
+# 6. Forward Kinematics Enrichment
+
+The Dataset Bridge should not only copy joint values.
+
+For each timestep calculate additional physical information using forward kinematics.
+
+At minimum calculate:
+
+* left end-effector position
+* left end-effector orientation
+* right end-effector position
+* right end-effector orientation
+
+Where object tracking is available, also calculate:
+
+* object position
+* object orientation
+* distance from end-effector to object
+* relative end-effector/object transform
+* relative transform between both end-effectors
+
+This enriched representation will later become the foundation of the sensory-cognitive layer.
+
+---
+
+# 7. Demonstration Replay
+
+Before attempting any machine learning, implement deterministic replay.
+
+A demonstration recorded on the real robot must be replayable on the digital twin.
+
+The first validation milestone is extremely simple:
+
+1. Perform a manipulation task using teleoperation.
+2. Record the episode.
+3. Load the episode into Isaac.
+4. Replay the joint trajectory.
+5. Compare physical and simulated behavior.
+
+Do not continue to synthetic-data generation until replay is reasonably consistent.
+
+If replay diverges, investigate:
+
+* calibration
+* joint mapping
+* coordinate systems
+* control frequency
+* actuator configuration
+* robot geometry
+* object placement
+* physics parameters
+
+Replay correctness is a prerequisite for later experiments.
+
+---
+
+# 8. Isaac Lab Dataset Generation
+
+Once real demonstrations replay correctly, use Isaac Lab as a data amplification system.
+
+The purpose of simulation is NOT merely to reproduce the original demonstration.
+
+Generate variations around it.
+
+Potential randomized parameters include:
+
+* object position
+* object rotation
+* object mass
+* friction
+* robot initial configuration
+* camera position
+* lighting
+* actuator noise
+* observation noise
+* latency
+
+Where appropriate, investigate Isaac Lab Mimic for demonstration-based synthetic trajectory generation.
+
+The objective is approximately:
+
+10–20 real demonstrations
+
+→ hundreds or thousands of simulated variations.
+
+Keep the original real demonstrations distinguishable from synthetic demonstrations in dataset metadata.
+
+---
+
+# 9. LeRobot Training Dataset Export
+
+Synthetic demonstrations should eventually be exportable back into a format usable by the existing LeRobot training pipeline.
+
+The desired pipeline is therefore bidirectional:
+
+LeRobot
+→ Isaac
+
+and
+
+Isaac
+→ LeRobot-compatible training dataset.
+
+Do not tightly couple policy training to Isaac unless necessary.
+
+Isaac should initially be treated primarily as:
+
+**a physical-data amplification engine.**
+
+This allows existing LeRobot policy-training infrastructure to remain usable.
+
+---
+
+# 10. Baseline Experiment
+
+Implement one deliberately simple manipulation task first.
+
+Recommended first task:
+
+**Pick → Move → Place**
+
+Do not begin with complicated dual-arm coordination.
+
+Once the single-arm pipeline works reliably, extend it to:
+
+**Pick → Handover → Place**
+
+using both arms.
+
+For the baseline experiment compare:
+
+### Experiment A
+
+Standard LeRobot learning using a relatively large real demonstration dataset.
+
+Example:
+
+50–100 real demonstrations.
+
+### Experiment B
+
+Small real dataset plus simulation augmentation.
+
+Example:
+
+10–20 real demonstrations
+
+* synthetic Isaac demonstrations.
+
+Measure:
+
+* success rate
+* real demonstrations required
+* training time
+* generalization to unseen object positions
+* generalization to unseen orientations
+* failure categories
+
+The main metric is:
+
+**real-world demonstrations required to reach a target success rate.**
+
+---
+
+# 11. Failure-Driven Learning
+
+After training, deploy the policy on the physical robot.
+
+Do not simply continue collecting successful demonstrations.
+
+Record failures and low-confidence situations.
+
+Examples:
+
+* failed grasp
+* object slip
+* incorrect approach
+* collision
+* incorrect placement
+* unusual object orientation
+
+Human teleoperation should then correct these specific cases.
+
+The new correction becomes another seed demonstration.
+
+The learning loop becomes:
+
+Train
+→ Deploy
+→ Detect Failure
+→ Human Correction
+→ Simulate Variations
+→ Retrain
+
+This is preferable to blindly increasing dataset size.
+
+---
+
+# 12. Sensory-Cognitive Layer — Initial Research Prototype
+
+Create a separate module called:
+
+**Physical State Layer**
+
+or
+
+**Sensory-Cognitive Layer**
+
+Do not attempt to build a general world model initially.
+
+Version 0 should be intentionally simple.
+
+Its purpose is to transform low-level observations into explicit physical relationships.
+
+Inputs may initially include:
+
+* robot joint state
+* forward kinematics
+* camera-based object detection
+* simulated ground-truth object pose
+
+Outputs should describe physical state rather than raw sensors.
+
+For example:
+
+* end-effector position
+* object position
+* distance to object
+* relative orientation
+* gripper state
+* object motion
+* approaching / moving away
+* contact state
+* grasp state
+* confidence
+
+Conceptually the layer should answer:
+
+**What exists?**
+
+**Where is it?**
+
+**How is it moving?**
+
+**How is the robot physically related to it?**
+
+---
+
+# 13. Start With Simulation Ground Truth
+
+Isaac provides exact information about the simulated physical world.
+
+Use this advantage.
+
+The first version of the sensory-cognitive layer may use perfect simulator state:
+
+* exact object pose
+* exact velocity
+* exact contact state
+* exact robot pose
+
+This provides a reference implementation.
+
+Later replace simulator ground truth progressively with real perception.
+
+For example:
+
+Stage 1:
+
+Exact object pose from Isaac.
+
+Stage 2:
+
+Object pose estimated from simulated camera images.
+
+Stage 3:
+
+Add visual noise and partial occlusion.
+
+Stage 4:
+
+Estimate the same state from real robot cameras.
+
+This allows perception error to be studied separately from policy learning.
+
+---
+
+# 14. Core Research Experiment
+
+Train two comparable policies.
+
+### Baseline Policy
+
+Inputs:
+
+* camera observations
+* robot joint state
+
+### Cognitive-State Policy
+
+Inputs:
+
+* same camera observations
+* same robot joint state
+* explicit physical-state representation
+
+Compare learning efficiency.
+
+Primary research question:
+
+> Does explicit physical-state representation reduce the number of demonstrations required to learn a manipulation task?
+
+Secondary questions:
+
+* Does it improve generalization?
+* Does it improve recovery from unusual situations?
+* Does it reduce catastrophic failures?
+* Which physical features provide the largest improvement?
+* How much performance is lost when perfect simulator state is replaced with noisy perception?
+
+---
+
+# 15. Progressive Sensory Expansion
+
+Do not add many sensors initially.
+
+Start with geometry.
+
+Version 0:
+
+vision + joint state + geometry
+
+Later experiments may introduce:
+
+* depth
+* force/torque
+* tactile sensing
+* IMU
+* proximity
+* temperature
+* vibration
+
+Each new modality should justify itself experimentally.
+
+The research question should always be:
+
+> Does this additional sensory information improve learning efficiency or physical robustness?
+
+Avoid adding sensors merely because they are available.
+
+---
+
+# 16. Uncertainty
+
+Design the Physical State Layer so that confidence or uncertainty can eventually be represented.
+
+For example:
+
+object detected: 0.97 confidence
+
+grasp successful: 0.81 confidence
+
+slip probability: 0.23
+
+The long-term objective is for the robot to distinguish between:
+
+**I know what is happening**
+
+and
+
+**I am uncertain about what is happening.**
+
+Uncertain situations can then automatically become candidates for human demonstration or additional simulation.
+
+---
+
+# 17. Architecture
+
+Keep the architecture modular.
+
+Suggested modules:
+
+**robot/**
+Physical LeRobot communication and teleoperation.
+
+**datasets/**
+LeRobot dataset reading, writing and metadata.
+
+**bridge/**
+LeRobot ↔ Isaac conversion.
+
+**simulation/**
+Isaac Sim / Isaac Lab environments.
+
+**augmentation/**
+Synthetic demonstration generation and domain randomization.
+
+**physical_state/**
+Sensory-cognitive representation.
+
+**training/**
+Policy training.
+
+**evaluation/**
+Real and simulated evaluation.
+
+**experiments/**
+Reproducible experiment definitions.
+
+**configs/**
+Robot mappings, task definitions and experiment parameters.
+
+Avoid mixing simulation-specific code with the physical-state representation.
+
+The sensory-cognitive layer should eventually be usable both in Isaac and on the real robot.
+
+---
+
+# 18. Data Provenance
+
+Every episode should contain metadata describing where it came from.
+
+At minimum distinguish:
+
+* REAL_HUMAN
+* SIM_REPLAY
+* SIM_SYNTHETIC
+* REAL_POLICY
+* REAL_CORRECTION
+
+Also preserve parent relationships.
+
+For example:
+
+Synthetic Episode 0087
+→ generated from Real Demonstration 0004.
+
+This will later allow analysis of which real demonstrations produced useful synthetic experience.
+
+---
+
+# 19. Reproducibility
+
+Every experiment should be reproducible from configuration.
+
+Record:
+
+* dataset version
+* robot configuration
+* simulation configuration
+* random seed
+* policy architecture
+* training parameters
+* sensory-state features
+* number of real demonstrations
+* number of synthetic demonstrations
+* evaluation conditions
+* success rate
+
+Do not rely on undocumented manual steps.
+
+---
+
+# 20. Implementation Strategy for the Coding Agent
+
+Do not attempt to implement the complete research system at once.
+
+Work incrementally.
+
+The first milestones should be:
+
+**Milestone 1**
+
+Inspect the existing LeRobot and Isaac codebase.
+
+Document the current robot model, dataset format and teleoperation pipeline.
+
+Do not rewrite working components unnecessarily.
+
+**Milestone 2**
+
+Record one real demonstration and build a parser capable of inspecting every recorded signal.
+
+**Milestone 3**
+
+Create the robot joint and coordinate mapping between LeRobot and Isaac.
+
+**Milestone 4**
+
+Replay one real demonstration successfully in Isaac Sim.
+
+This is the first major integration milestone.
+
+**Milestone 5**
+
+Generate a small number of variations of that demonstration in Isaac Lab.
+
+**Milestone 6**
+
+Export generated demonstrations into the policy-training pipeline.
+
+**Milestone 7**
+
+Train a policy using mixed real and synthetic data.
+
+**Milestone 8**
+
+Deploy it on the physical robot and record failures.
+
+Only after these steps work reliably should the sensory-cognitive research branch become more sophisticated.
+
+---
+
+# 21. First Sensory-Cognitive Milestone
+
+The first implementation should contain only:
+
+* robot end-effector pose
+* object pose
+* relative object/end-effector transform
+* distance to object
+* gripper state
+* object velocity
+* contact/grasp state
+
+Do not introduce an LLM.
+
+Do not introduce a complex semantic world model.
+
+Do not introduce a large database.
+
+Do not introduce unnecessary distributed infrastructure.
+
+The first question is purely experimental:
+
+> Can a small explicit physical-state vector improve manipulation learning?
+
+---
+
+# 22. Long-Term Direction
+
+The project may eventually evolve from a simple physical-state vector into a general physical perception abstraction.
+
+Conceptually:
+
+Sensors
+→ Sensor Fusion
+→ Physical State
+→ Affordances
+→ World Model
+→ Policy / Reasoning
+→ Motor Control
+
+The eventual sensory-cognitive layer could provide a robot-independent representation such as:
+
+object identity
+
+* pose
+* velocity
+* physical properties
+* relationships
+* affordances
+* uncertainty.
+
+This could potentially allow learned skills to transfer more easily between different robots and sensor configurations.
+
+However, this is a research direction, not an assumption.
+
+Every step must be validated experimentally.
+
+---
+
+# 23. Guiding Principle
+
+The central idea of the project is:
+
+> Do not solve inefficient robot learning by collecting more repetitions.
+> Increase the information value of every real-world interaction.
+
+Human demonstrations should provide intent.
+
+Simulation should provide scale.
+
+Physical-state representation should provide structure.
+
+Real-world failures should determine what the system needs to learn next.
+
+The project succeeds if progressively fewer real human demonstrations are required to teach increasingly robust physical skills.

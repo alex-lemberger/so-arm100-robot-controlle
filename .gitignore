@@ -11,6 +11,14 @@ coverage/
 /so-arm100/data/external/
 /so-arm100/data/experiments/
 /so-arm100/data/local/
+# Recorded and generated datasets -- ~4GB of parquet/mp4 on top of data/local's 6GB.
+# The synthetic set is reproducible from its recorded seeds (Rule 10), and the
+# recorded ones are raw capture, not source.
+/so-arm100/data/circle_grasp_v1/
+/so-arm100/data/circle_insert_50ep/
+/so-arm100/data/circle_insert_50ep_trimmed/
+/so-arm100/data/lerobot_dataset/
+/so-arm100/data/synthetic/
 /so-arm100/outputs/
 /so-arm100/.cache/
 /so-arm100/.venv-lerobot/
