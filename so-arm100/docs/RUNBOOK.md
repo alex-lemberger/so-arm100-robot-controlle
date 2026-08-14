@@ -64,6 +64,23 @@ fresh `docker run` — that's exactly how the calibration mount got dropped
 on 2026-08-14 (an ad-hoc command omitted it, causing a silent full
 recalibration and an invalid eval result).
 
+## Datasets and cameras
+
+**Every policy that has ever worked on this task used TWO cameras
+(`observation.images.overview` + `observation.images.wrist`).** The only
+checkpoint with a nonzero hardware success rate
+(`smolvla_circle_insert_50ep_30000`, 3/10) is two-camera.
+
+Datasets A/B/C (`circle_grasp_v1_real10`, `circle_grasp_v1_real50`,
+`circle_grasp_v1_mixed_10r_100s`) and `grasp_v1_dagger1` are
+**overview-only** — `scripts/export_lerobot_dataset.py` drops the wrist
+camera by design (it can't render a wrist view for synthetic episodes). All
+four scored 0/20 or degenerate on hardware. Treat any result from these four
+datasets as confounded; see `docs/replan-2026-08-14-camera-confound.md`.
+
+The *source* datasets (`data/circle_grasp_v1`, `data/circle_insert_50ep`)
+still have both cameras — nothing was lost, the exports just need redoing.
+
 ## Training
 
 - `--base <checkpoint> --steps N` for "resuming" a run does **not**
