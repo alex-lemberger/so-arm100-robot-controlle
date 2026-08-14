@@ -21,16 +21,29 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REFERENCE = REPO_ROOT / "docs" / "reference" / "board_reference_demo.png"
 
 
-def recess_center(bgr: np.ndarray) -> tuple[float, float, int]:
-    """Centroid of the green board features, ignoring the loose piece on the left."""
-    b, g, r = (bgr[:, :, i].astype(int) for i in range(3))
-    mask = (g > 90) & (g - r > 35) & (g - b > 15)
-    mask[:, :430] = False
-    mask[:150, :] = False
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return float("nan"), float("nan"), 0
-    return xs.mean(), ys.mean(), len(xs)
+def board_shift(ref_bgr: np.ndarray, live_bgr: np.ndarray) -> tuple[float, float, float]:
+    """Translation of the board between two frames, via phase correlation.
+
+    Colour thresholding was the first approach and it is not usable across
+    sessions: warmer evening light dropped the green pixel count from 5764 to
+    2841 and the centroid moved with it, giving a reading that drifted 15px
+    between two consecutive captures of a stationary board. Phase correlation
+    on gradient magnitude keys on edges instead of absolute colour, so it
+    survives an exposure change.
+    """
+    # The board only. Excludes the arm, the loose piece, and the background.
+    x0, x1, y0, y1 = 420, 830, 150, 540
+
+    def prep(bgr):
+        g = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+        gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+        mag = cv2.magnitude(gx, gy)
+        mag /= (mag.max() + 1e-6)
+        return mag * cv2.createHanningWindow((x1 - x0, y1 - y0), cv2.CV_32F)
+
+    (dx, dy), response = cv2.phaseCorrelate(prep(ref_bgr), prep(live_bgr))
+    return dx, dy, response
 
 
 def main() -> None:
@@ -60,24 +73,23 @@ def main() -> None:
     if live.shape != ref.shape:
         live = cv2.resize(live, (ref.shape[1], ref.shape[0]))
 
-    rx, ry, rn = recess_center(ref)
-    lx, ly, ln = recess_center(live)
-    dx, dy = lx - rx, ly - ry
+    dx, dy, response = board_shift(ref, live)
     dist = (dx**2 + dy**2) ** 0.5
 
     # ~200mm board spanning ~340px in this view.
     mm = dist * 200.0 / 340.0
 
-    print(f"reference green centroid: ({rx:7.1f}, {ry:7.1f})  [{rn} px]")
-    print(f"live      green centroid: ({lx:7.1f}, {ly:7.1f})  [{ln} px]")
-    print(f"OFFSET  dx={dx:+.1f}px  dy={dy:+.1f}px  |d|={dist:.1f}px  (~{mm:.0f} mm)")
+    print(f"board shift (live vs reference):  dx={dx:+.1f}px  dy={dy:+.1f}px")
+    print(f"  |d|={dist:.1f}px  (~{mm:.0f} mm)   correlation={response:.3f}")
+    if response < 0.10:
+        print("WARNING: weak correlation -- is the arm parked over the board,")
+        print("or the board out of the 420-830 x 150-540 crop? Check the overlay.")
     if dist < 5:
         print("ALIGNED -- good enough to run the eval.")
     else:
-        print(f"MOVE THE BOARD {'left' if dx > 0 else 'right'} "
-              f"and {'up' if dy > 0 else 'down'}, then re-run.")
-        print("Check the overlay for rotation too -- if the doubling grows toward")
-        print("one edge of the board, it is rotated, not just translated.")
+        print(f"MOVE THE BOARD {abs(dx):.0f}px {'left' if dx > 0 else 'right'} "
+              f"and {abs(dy):.0f}px {'up' if dy > 0 else 'down'} "
+              f"(~{abs(dx)*200/340:.0f}mm / ~{abs(dy)*200/340:.0f}mm), then re-run.")
 
     cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
     print(f"overlay written to {args.out}")

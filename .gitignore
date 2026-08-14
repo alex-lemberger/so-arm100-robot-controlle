@@ -64,3 +64,6 @@ Thumbs.db
 .history/*
 .sass-cache/
 .aider*
+
+# Alignment overlays are throwaway diagnostics, not artefacts.
+so-arm100/board_alignment.png
