@@ -22,6 +22,12 @@ This repository contains a Vite + React + TypeScript interface for controlling a
 
 ## Verified hardware setup
 
+**Stale as of the 2026-08-11 Linux relocation — ports/paths below are the
+old Mac setup.** See `docs/RUNBOOK.md` for current hardware facts (ports,
+calibration paths, docker invocation). This section is kept for historical
+context on the app's WebSerial calibration-register-match logic, which is
+still accurate.
+
 - The connected follower arm is the LeRobot calibration profile `white` (not the separate leader-arm profile `black`). Its saved calibration lives outside this repository under LeRobot's local cache; the copied `VITE_FEETECH_CALIBRATION` remains local in `.env.local`.
 - Direct WebSerial at 1,000,000 baud successfully verified Feetech servo IDs 1–6, matched the follower calibration registers, and moved the physical arm through this app on 2026-08-01.
 - On 2026-08-01 the leader was calibrated successfully with LeRobot as profile `black_20260801` on `/dev/cu.usbmodem5B140329561`; the follower remains `white` on `/dev/cu.usbmodem5AE60582701`. The leader calibration is stored outside this repository and copied only to local `.env.local` as `VITE_LEADER_FEETECH_CALIBRATION`.
