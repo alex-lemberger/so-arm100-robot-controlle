@@ -6,8 +6,13 @@ articulation (AGENTS_NEW.md Task 9 / Sec 16-17).
 This does NOT re-plan motion -- Stage 1 is deliberately naive (Rule 4: don't implement
 later phases before earlier ones are proven, and Sec 16: "do not begin with extreme
 randomization"). The commanded action trajectory is copied verbatim from the parent
-episode; only the *scene* (and where the robot starts from) is randomized, producing
-physically-varied object states paired with the same action labels.
+episode; only the *scene* (and where the robot starts from) is randomized.
+
+Because the actions are copied, only LABEL-PRESERVING axes are randomized by default
+(mass, friction, initial joint pose, cylinder yaw). The object/board POSE axes are
+inert unless --allow-label-breaking is passed, because moving the target while the
+actions still reach for its old location trains the policy to ignore the target's
+position. See src/augmentation/randomization.py for the full argument.
 
 Camera pixel noise is sampled and recorded in provenance for completeness, but not
 applied -- --capture-dir rendering is a known-unresolved bug (see
@@ -61,6 +66,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settle-steps", type=int, default=60)
     parser.add_argument("--out-dir", default=None, help="default: data/synthetic/<dataset name>")
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument(
+        "--allow-label-breaking", action="store_true",
+        help="randomize the object/board POSE axes under randomization.label_breaking. "
+             "Off by default: generate_synthetic.py copies the parent episode's actions "
+             "verbatim, so moving the target mislabels every frame and trains the policy "
+             "to ignore the target's position. Do not pass this until the actions are "
+             "re-planned per variation (needs IK). See src/augmentation/randomization.py.")
     parser.add_argument("--skip-scene-gate", action="store_true",
                         help="generate from a scene that has not been checked against reality; "
                              "recorded in the output's provenance")
@@ -133,6 +145,16 @@ def main() -> None:
     # rather than assuming they line up (Rule 6: no hard-coded joint mapping).
     reorder = np.array([robot.dof_names.index(n) for n in isaac_joint_order])
 
+    if args.allow_label_breaking:
+        print(
+            "WARNING: --allow-label-breaking is ON. Object/board pose will be randomized while the\n"
+            "         action labels are copied verbatim from the parent episode. Unless the actions\n"
+            "         are re-planned per variation, this dataset teaches the policy to ignore the\n"
+            "         target's position. Recorded per-episode as randomization.label_breaking_applied."
+        )
+    else:
+        print("Label-breaking pose axes are INERT (pass --allow-label-breaking to enable; read the help first).")
+
     print(f"Converting {len(parent_episodes)} parent episode(s) from {args.dataset}: {parent_episodes}")
     parent_trajectories = {ep: convert_episode(args.dataset, ep, args.config) for ep in parent_episodes}
 
@@ -144,7 +166,11 @@ def main() -> None:
         episode_id = f"synthetic_{i:04d}"
 
         try:
-            variation = sample_variation(scene_cfg["randomization"], seed=episode_seed)
+            variation = sample_variation(
+                scene_cfg["randomization"],
+                seed=episode_seed,
+                allow_label_breaking=args.allow_label_breaking,
+            )
 
             world.reset()
             apply_variation(scene_object, scene_material, scene_cfg["object"], variation)

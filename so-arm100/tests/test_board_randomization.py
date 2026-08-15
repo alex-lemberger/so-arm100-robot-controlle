@@ -28,14 +28,20 @@ def check(name, cond, detail=""):
     return cond
 
 
+def _without_board(cfg):
+    """`cfg` as it looked before board randomization existed (2026-08-14)."""
+    breaking = {k: v for k, v in cfg.get("label_breaking", {}).items() if not k.startswith("board_")}
+    return {**cfg, "label_breaking": breaking}
+
+
 def test_seeds_reproduce_previous_object_draws():
     """Board draws were appended last so old seeds still give the old object variation."""
     cfg = CFG["randomization"]
-    stripped = {k: v for k, v in cfg.items() if not k.startswith("board_")}
+    stripped = _without_board(cfg)
     ok = True
     for seed in (0, 1, 42, 12345):
-        with_board = sample_variation(cfg, seed=seed)
-        without = sample_variation(stripped, seed=seed)
+        with_board = sample_variation(cfg, seed=seed, allow_label_breaking=True)
+        without = sample_variation(stripped, seed=seed, allow_label_breaking=True)
         same = (
             with_board.object_offset_x == without.object_offset_x
             and with_board.object_offset_y == without.object_offset_y
@@ -54,10 +60,11 @@ def test_sampled_board_pose_within_configured_range():
     cfg = CFG["randomization"]
     xs, ys, yaws = [], [], []
     for seed in range(400):
-        v = sample_variation(cfg, seed=seed)
+        v = sample_variation(cfg, seed=seed, allow_label_breaking=True)
         xs.append(v.board_offset_x); ys.append(v.board_offset_y); yaws.append(v.board_yaw_deg)
-    xr, yr = cfg["board_position"]["x"], cfg["board_position"]["y"]
-    wr = cfg["board_rotation_deg"]["yaw"]
+    breaking = cfg["label_breaking"]
+    xr, yr = breaking["board_position"]["x"], breaking["board_position"]["y"]
+    wr = breaking["board_rotation_deg"]["yaw"]
     ok = check("board x within range", xr[0] <= min(xs) and max(xs) <= xr[1])
     ok &= check("board y within range", yr[0] <= min(ys) and max(ys) <= yr[1])
     ok &= check("board yaw within range", wr[0] <= min(yaws) and max(yaws) <= wr[1])

@@ -44,10 +44,10 @@ object:
 # Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
 # Sec 16 -- values below are copied verbatim from that section's example, i.e. the
 # spec's own "conservative, do not start extreme" starting point, not independently
-# tuned). Motion itself is NOT re-planned at this stage (Rule 4) -- only the object's
-# pose/mass/friction and the robot's initial joint pose are randomized per synthetic
-# episode; the commanded joint trajectory is copied verbatim from the parent real
-# episode. See scripts/generate_synthetic.py.
+# tuned). motion is NOT re-planned at this stage (Rule 4): the commanded joint
+# trajectory is copied verbatim from the parent real episode. That is exactly why the
+# object/board POSE axes are inert -- moving them without re-planning mislabels the
+# episode. See scripts/generate_synthetic.py and src/augmentation/randomization.py.
 # The shape-sorter puzzle board -- the insertion TARGET. Absent from this scene
 # until 2026-08-14: the sim had only the table and the peg, so every synthetic
 # episode showed the peg with nothing to insert it into, and board pose could not
@@ -121,16 +121,22 @@ board:
 # Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
 # Sec 16 -- values below are copied verbatim from that section's example, i.e. the
 # spec's own "conservative, do not start extreme" starting point, not independently
-# tuned). Motion itself is NOT re-planned at this stage (Rule 4) -- only the object's
-# pose/mass/friction and the robot's initial joint pose are randomized per synthetic
-# episode; the commanded joint trajectory is copied verbatim from the parent real
-# episode. See scripts/generate_synthetic.py.
+# tuned). motion is NOT re-planned at this stage (Rule 4): the commanded joint
+# trajectory is copied verbatim from the parent real episode. That is exactly why the
+# object/board POSE axes are inert -- moving them without re-planning mislabels the
+# episode. See scripts/generate_synthetic.py and src/augmentation/randomization.py.
 
 
+# SPLIT 2026-08-15 into label-preserving axes (active) and label-breaking ones
+# (under `label_breaking:`, inert by default). generate_synthetic.py copies the
+# parent episode's actions VERBATIM, so an axis is only safe to randomize if the
+# copied actions stay correct after it moves. See the module docstring in
+# src/augmentation/randomization.py for the full argument.
 randomization:
-  object_position:
-    x: [-0.03, 0.03]
-    y: [-0.03, 0.03]
+  # -- LABEL-PRESERVING ------------------------------------------------------
+  # Yaw of the peg. Safe ONLY because the peg is a cylinder, so a yaw rotation is
+  # geometrically the identity -- neither the frames nor the reach change. Move to
+  # label_breaking: the moment a non-symmetric object is used.
   object_rotation_deg:
     yaw: [-15, 15]
   mass_scale:
@@ -139,24 +145,43 @@ randomization:
   friction_scale:
     min: 0.8
     max: 1.2
-  # Board pose. This is the axis that matters for deployment: the real board gets
-  # nudged between sessions, and a policy trained with it fixed memorises its
-  # location instead of locating it. Measured drift ACROSS circle_insert_50ep was
-  # only ~2.5mm (so the real demos carry no signal to learn this from), while the
-  # board was found ~19mm out of place on 2026-08-14. Ranges below deliberately
-  # exceed that, so 19mm sits comfortably inside the training distribution rather
-  # than at its edge.
-  board_position:
-    x: [-0.03, 0.03]
-    y: [-0.03, 0.03]
-  board_rotation_deg:
-    yaw: [-10, 10]
   # Not in AGENTS_NEW.md's example block, but Sec 16's prose also lists these two:
   robot_initial_joint_noise_deg: 3.0   # +/- jitter (per arm joint) applied before the
                                         # settle-to-frame-0 phase, not to the replay itself
   camera_pixel_noise_std: 0.01         # sampled + recorded in provenance; NOT yet applied --
                                         # --capture-dir rendering is a known-unresolved bug,
                                         # see docs/linux-session-handover-2026-08-11.md
+
+  # -- LABEL-BREAKING: INERT unless --allow-label-breaking -------------------
+  # Every axis below moves the thing the copied trajectory was reaching for, while
+  # the action labels keep pointing at where it used to be. That teaches the policy
+  # to ignore the target's position -- which is the failure being fought on hardware
+  # (grasp 4/8 on rollout_grasp_v1_r1, 2026-08-15). Datasets containing these
+  # episodes are actively harmful, not merely diluted.
+  #
+  # The ranges are kept, not deleted, for two reasons: they are the tuned values to
+  # restore once the actions are re-planned per variation (which needs IK -- the repo
+  # has forward kinematics only), and keeping them keeps the random draw order frozen
+  # so old seeds still reproduce old episodes exactly (Rule 10).
+  #
+  # Do NOT pass --allow-label-breaking until the re-planning exists.
+  label_breaking:
+    object_position:
+      x: [-0.03, 0.03]
+      y: [-0.03, 0.03]
+    # Board pose. Argued for on 2026-08-14 as "the axis that matters for deployment":
+    # the real board gets nudged between sessions, measured drift ACROSS
+    # circle_insert_50ep was only ~2.5mm (so the real demos carry no signal to learn
+    # this from), and the board was found ~19mm out of place on 2026-08-14. That
+    # argument is still right about WHY the axis is wanted, but it is the same
+    # mislabelling defect as object_position: the insert phase's actions target the
+    # board's old pose. It is inert here for that reason, not because it stopped
+    # mattering.
+    board_position:
+      x: [-0.03, 0.03]
+      y: [-0.03, 0.03]
+    board_rotation_deg:
+      yaw: [-10, 10]
 
 camera:
   # Rough top-down framing matching observation.images.overview's angle. Not

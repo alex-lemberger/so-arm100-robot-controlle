@@ -64,6 +64,38 @@ fresh `docker run` — that's exactly how the calibration mount got dropped
 on 2026-08-14 (an ad-hoc command omitted it, causing a silent full
 recalibration and an invalid eval result).
 
+## Running the tests
+
+**`./run_tests.sh`** — every `tests/test_*.py`, in `lerobot-train:latest`.
+`./run_tests.sh <pattern>` filters by filename. There is no native Python env
+on this machine (no numpy outside the images), so tests only ever run in a
+container; this is the non-hardware counterpart to `hw_docker.sh`. The
+`tests/smoke_*_isaac.py` files are excluded — they need `leisaac-sim:latest`
+and a display.
+
+## Synthetic data: label-preserving vs label-breaking
+
+`scripts/generate_synthetic.py` copies the parent episode's actions
+**verbatim** (Rule 4). An axis is therefore only safe to randomize if the
+copied actions stay correct after it moves.
+
+- **Safe, on by default:** mass, friction, initial joint pose (spent before
+  the settle-to-frame-0 phase), camera noise, and peg yaw (the peg is a
+  cylinder, so yaw is geometrically a no-op — this stops being true for a
+  non-symmetric object).
+- **Unsafe, inert:** object and board **pose**. Moving the target while the
+  labels still reach for its old location trains the policy to ignore the
+  target's position — the failure being fought on hardware. These live under
+  `randomization.label_breaking:` in `configs/simulation.yaml` and stay zero
+  unless `--allow-label-breaking` is passed. **Do not pass it** until the
+  actions are re-planned per variation, which needs IK (the repo has forward
+  kinematics only).
+
+`data/synthetic/circle_grasp_v1/` (100 episodes, pre-2026-08-15) was
+generated with the pose axes live and is mislabelled — see the
+`DO_NOT_TRAIN_ON_THIS.md` in that directory. Its seeds still reproduce
+bit-identically, so it can be regenerated once the re-planning exists.
+
 ## Datasets and cameras
 
 **Every policy that has ever worked on this task used TWO cameras
