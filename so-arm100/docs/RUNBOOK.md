@@ -84,6 +84,19 @@ Never hand-write that `docker run` line. Omitting its `/Users` read-only
 mount (where the robot USD lives) surfaces as an `is_homogeneous` assertion
 deep inside articulation init, which looks nothing like a missing mount.
 
+## Looking at the scene
+
+**`./view_scene.sh`** opens the sim scene in a window with a camera you can
+fly — the same scene `export_lerobot_dataset.py` builds, so if it looks wrong
+there it is wrong in the data. `--light-scale 0.75` / `1.15` show the ends of
+the randomization range. It is `sim_docker.sh` plus X11 passthrough (kept
+separate: the GUI flags and the Xauthority mount are needless for the headless
+runs, which is everything else).
+
+The scene gate's side-by-side is one fixed camera and will not show you
+everything. The missing knobs (below) were spotted in it, but only because
+someone looked; the automated checks all passed.
+
 ## Synthetic data: label-preserving vs label-breaking
 
 `scripts/generate_synthetic.py` copies the parent episode's actions
@@ -131,6 +144,25 @@ It previously used dome 1000 / distant 2500 at a different azimuth, so the
 side-by-side a human approved was not lit like the frames that went to
 training. **The gate approval is stale — re-run `./check_scene_gate.sh` and
 look at the picture before generating or exporting anything.**
+
+### The board, the peg, and the knobs
+
+`docs/reference/toy.png` is a dimensioned drawing and is the authority for board
+geometry. Three things it settles that the sim had wrong until 2026-08-15,
+found by looking at the gate's side-by-side:
+
+- **The knob.** 13mm across, 13mm tall, one centred on every piece. The gripper
+  closes on the *knob*, not the piece — a 13mm post standing proud of a 50mm
+  disc. The sim had no knobs at all and offered a bare 40mm cylinder, i.e. the
+  wrong object at exactly the moment the policy decides how wide to close.
+- **The peg is the circle piece.** In `board_reference_demo.png` five pieces are
+  seated and the circle recess is empty, its piece on the table. So the peg's
+  radius must equal the circle recess's (both 50mm). They were independently
+  0.02 and 0.025 — the sim showed a peg that could not have come out of the hole
+  it gets inserted into. `tests/test_board_randomization.py` guards this now.
+- **`filled:` per recess.** A seated piece carries a knob; an empty recess is a
+  bare painted floor. The sim drew all six identically, so the hole the policy
+  has to find looked exactly like the five it must ignore.
 
 `data/synthetic/circle_grasp_v1/` (100 episodes, pre-2026-08-15) was
 generated with the pose axes live and is mislabelled — see the

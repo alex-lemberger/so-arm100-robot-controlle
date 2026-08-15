@@ -143,6 +143,41 @@ def apply_lighting_variation(lights: SceneLights, variation) -> None:
     lights.distant_rotate_op.Set((rx, ry, rz + yaw))
 
 
+def _knob_dims(scene_cfg: dict[str, Any]) -> tuple[float, float, list[float]]:
+    knob_cfg = scene_cfg.get("knob", {})
+    return (
+        float(knob_cfg.get("radius", 0.0065)),
+        float(knob_cfg.get("height", 0.013)),
+        list(knob_cfg.get("color", [0.93, 0.90, 0.84])),
+    )
+
+
+def _attach_knob(parent_prim_path: str, radius: float, height: float, color: list[float], z_offset: float):
+    """Add a knob cylinder as a CHILD of `parent_prim_path`.
+
+    Child, not a sibling, so it inherits the parent's transform -- a knob added as
+    its own world-space prim would stay behind the moment the peg is nudged, and
+    the peg is a dynamic body.
+
+    Deliberately visual-only: no CollisionAPI. Motion is replayed rather than
+    re-planned (Rule 4), so giving the knob a collider would change the replay's
+    contact dynamics -- a real decision about how the sim behaves, separate from
+    making it look right, and not one to smuggle in with a rendering fix.
+    """
+    import omni.usd
+    from pxr import Gf, UsdGeom
+
+    stage = omni.usd.get_context().get_stage()
+    knob = UsdGeom.Cylinder.Define(stage, f"{parent_prim_path}/knob")
+    knob.CreateRadiusAttr(radius)
+    knob.CreateHeightAttr(height)
+    knob.CreateAxisAttr("Z")
+    knob.CreateExtentAttr([(-radius, -radius, -height / 2), (radius, radius, height / 2)])
+    knob.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+    UsdGeom.Xformable(knob).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, z_offset))
+    return knob
+
+
 def add_table_and_object(world, scene_cfg: dict[str, Any]):
     """Add the table (static) and one object (dynamic rigid body) to `world.scene`,
     plus a physics material on the object so friction can be re-tuned per synthetic
@@ -182,6 +217,11 @@ def add_table_and_object(world, scene_cfg: dict[str, Any]):
             color=np.array(obj_cfg.get("color", [0.5, 0.5, 0.5]), dtype=np.float32),
         )
     )
+
+    # The knob the gripper actually closes on. See `knob:` in configs/simulation.yaml.
+    knob_r, knob_h, knob_color = _knob_dims(scene_cfg)
+    _attach_knob(f"/World/{obj_cfg['id']}", knob_r, knob_h, knob_color,
+                 z_offset=obj_cfg["height"] / 2.0 + knob_h / 2.0)
 
     base_friction = obj_cfg.get("base_friction", 0.5)
     material = PhysicsMaterial(
@@ -275,8 +315,8 @@ def board_component_pose(board_base_pos, board_base_quat_wxyz, local_offset, loc
 
 
 def add_board(world, scene_cfg: dict[str, Any]):
-    """Add the shape-sorter board -- slab plus one visual marker per recess -- to
-    `world.scene`. Returns a list of (handle, local_offset, local_quat_wxyz) for
+    """Add the shape-sorter board -- slab, one visual marker per recess, and a knob
+    on each recess whose piece is SEATED (`filled: true`) -- to `world.scene`. Returns a list of (handle, local_offset, local_quat_wxyz) for
     `apply_board_variation`, or None if the config has no `board` section (older
     configs stay valid and simply have no board).
 
@@ -315,6 +355,7 @@ def add_board(world, scene_cfg: dict[str, Any]):
 
     disc_thickness = 0.002
     local_z = size[2] / 2.0 + disc_thickness / 2.0  # sits on the slab's top face
+    knob_r, knob_h, knob_color = _knob_dims(scene_cfg)
 
     for rec in board_cfg.get("recesses", []):
         local_offset = np.array([rec["offset"][0], rec["offset"][1], local_z], dtype=np.float64)
@@ -339,6 +380,13 @@ def add_board(world, scene_cfg: dict[str, Any]):
         else:
             raise NotImplementedError(f"Unsupported recess shape {rec['shape']!r} for {rec['id']!r}")
         components.append((handle, local_offset, local_quat))
+
+        # A SEATED piece carries a knob; an empty recess is a bare painted floor.
+        # That difference is the only thing marking the insertion target apart from
+        # the five distractors, so it is the last thing to leave out.
+        if rec.get("filled", True):
+            _attach_knob(common["prim_path"], knob_r, knob_h, knob_color,
+                         z_offset=disc_thickness / 2.0 + knob_h / 2.0)
 
     return components
 

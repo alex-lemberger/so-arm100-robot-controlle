@@ -21,11 +21,28 @@ table:
   position: [0.0, 0.0, -0.011]  # top face at z=-0.001
   color: [0.9, 0.9, 0.85]       # off-white, matches the paper backdrop
 
+# The knob. MEASURED from the dimensioned drawing in docs/reference/toy.png:
+# 13mm across, 13mm tall, one centred on every piece. Added 2026-08-15 after the
+# scene-gate side-by-side showed the sim had no knobs at all.
+#
+# This is not decoration. In docs/reference/board_reference_demo.png the gripper
+# closes on the KNOB, not on the piece -- a 13mm post standing proud of a 50mm
+# disc. The sim was offering a bare 40mm cylinder instead, i.e. the wrong object
+# at the exact moment the policy has to decide how wide to close. The failure
+# being fought is "no grasp, 4/8".
+knob:
+  radius: 0.0065        # 13mm across
+  height: 0.013         # 13mm tall
+  color: [0.93, 0.90, 0.84]   # bare/cream wood, not the piece's paint
+
 object:
   id: circle_peg
   shape: cylinder
-  radius: 0.02   # ~4cm diameter, eyeballed against the gripper jaw width in frame 0
-  height: 0.03
+  # MEASURED from docs/reference/toy.png (was eyeballed at r=0.02, h=0.03 -- the
+  # config said outright to replace it once a measurement existed). The circle
+  # recess is 50mm exact, and the pieces are the board's own 12mm thickness.
+  radius: 0.025  # 50mm diameter, exact
+  height: 0.012
   # PROVISIONAL, NOT MEASURED. The old [0.18, -0.05] was chosen when the board's
   # position was a guess; with the board now measured at [0.152, 0, 0.005] that
   # point falls INSIDE the board's footprint (x 0.065-0.239, y -0.087-0.087) and
@@ -35,7 +52,7 @@ object:
   # roughly as it does in docs/reference/board_reference_demo.png.
   # Replace with a real measurement of where the peg is actually placed --
   # tests/test_board_randomization.py asserts only that it stays clear of the board.
-  position: [0.14, -0.13, 0.014]  # z = table top (-0.001) + half height
+  position: [0.14, -0.13, 0.005]  # z = table top (-0.001) + half height (0.006)
   rotation: [0.0, 0.0, 0.0, 1.0]  # x, y, z, w (identity) -- USD/ROS convention
   mass: 0.02   # kg, light wooden peg
   base_friction: 0.5   # both static and dynamic; Isaac default-ish, not measured on real wood/paper
@@ -110,13 +127,19 @@ board:
   recesses:
     # offset is (x, y) in the BOARD's own frame (the DRAWING's orientation: +x
     # right, +y up), measured from the slab centre.
-    - {id: triangle,  offset: [-0.053,  0.027], shape: cylinder, radius: 0.019, color: [0.90, 0.50, 0.25]}
-    - {id: rectangle, offset: [ 0.002,  0.045], shape: cuboid,   size: [0.043, 0.063], color: [0.20, 0.35, 0.70]}
-    - {id: diamond,   offset: [ 0.054,  0.033], shape: cuboid,   size: [0.039, 0.039], yaw_deg: 45, color: [0.45, 0.25, 0.55]}
-    - {id: pentagon,  offset: [-0.053, -0.050], shape: cylinder, radius: 0.024, color: [0.20, 0.55, 0.35]}
-    - {id: square,    offset: [ 0.002, -0.023], shape: cuboid,   size: [0.046, 0.046], color: [0.88, 0.42, 0.35]}
-    # The one that matters: recess diameter 50mm, exact.
-    - {id: circle,    offset: [ 0.054, -0.049], shape: cylinder, radius: 0.025, color: [0.20, 0.55, 0.45]}
+    # `filled` (added 2026-08-15) says whether the piece is SEATED in its recess.
+    # A seated piece carries a knob; an empty recess is a bare painted floor. In
+    # board_reference_demo.png five are seated and the circle is empty -- and the
+    # empty one is the insertion TARGET. The sim drew all six identically, so the
+    # hole the policy has to find looked exactly like the five it must ignore.
+    - {id: triangle,  offset: [-0.053,  0.027], shape: cylinder, radius: 0.019, color: [0.90, 0.50, 0.25], filled: true}
+    - {id: rectangle, offset: [ 0.002,  0.045], shape: cuboid,   size: [0.043, 0.063], color: [0.20, 0.35, 0.70], filled: true}
+    - {id: diamond,   offset: [ 0.054,  0.033], shape: cuboid,   size: [0.039, 0.039], yaw_deg: 45, color: [0.45, 0.25, 0.55], filled: true}
+    - {id: pentagon,  offset: [-0.053, -0.050], shape: cylinder, radius: 0.024, color: [0.20, 0.55, 0.35], filled: true}
+    - {id: square,    offset: [ 0.002, -0.023], shape: cuboid,   size: [0.046, 0.046], color: [0.88, 0.42, 0.35], filled: true}
+    # The one that matters: recess diameter 50mm, exact. Empty -- its piece is the
+    # loose peg under `object:`, which is why that peg is 50mm too.
+    - {id: circle,    offset: [ 0.054, -0.049], shape: cylinder, radius: 0.025, color: [0.20, 0.55, 0.45], filled: false}
 
 # Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
 # Sec 16 -- values below are copied verbatim from that section's example, i.e. the

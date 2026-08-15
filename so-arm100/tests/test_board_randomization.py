@@ -180,6 +180,52 @@ def test_peg_does_not_intersect_the_board():
     return ok
 
 
+def test_peg_matches_the_circle_recess():
+    """The loose peg IS the circle piece -- board_reference_demo.png shows five
+    pieces seated and the circle recess empty, with its piece on the table. So the
+    peg's radius must equal the circle recess's, and both must equal the drawing's
+    50mm. They were independently 0.02 and 0.025 until 2026-08-15, i.e. the sim
+    showed a peg that could not have come out of the hole it is inserted into.
+    """
+    obj = CFG["object"]
+    circle = next(r for r in CFG["board"]["recesses"] if r["id"] == "circle")
+    ok = check("peg radius == circle recess radius", obj["radius"] == circle["radius"],
+               f"{obj['radius']} vs {circle['radius']}")
+    ok &= check("both are the drawing's 50mm diameter", obj["radius"] == 0.025,
+                f"radius {obj['radius']}")
+    # Pieces are the board's own thickness -- they sit flush in the recess.
+    ok &= check("peg is the board's thickness", abs(obj["height"] - CFG["board"]["size"][2]) < 1e-9,
+                f"peg h {obj['height']} vs board {CFG['board']['size'][2]}")
+    # And it has to rest ON the table, not sunk into it or hovering.
+    table_top = CFG["table"]["position"][2] + CFG["table"]["size"][2] / 2
+    ok &= check("peg rests on the table top", abs(obj["position"][2] - (table_top + obj["height"] / 2)) < 1e-9,
+                f"z {obj['position'][2]}, expected {table_top + obj['height'] / 2}")
+    return ok
+
+
+def test_knob_matches_the_drawing():
+    """The knob is what the gripper closes on, so its size is not cosmetic: it sets
+    how wide the jaws have to be. docs/reference/toy.png dimensions it at 13mm across
+    and 13mm tall."""
+    knob = CFG["knob"]
+    ok = check("knob is 13mm across", abs(knob["radius"] * 2 - 0.013) < 1e-9, f"{knob['radius'] * 2}")
+    ok &= check("knob is 13mm tall", abs(knob["height"] - 0.013) < 1e-9, f"{knob['height']}")
+    # Much narrower than the piece it stands on -- that contrast is the whole point.
+    ok &= check("knob is far narrower than the peg", knob["radius"] < CFG["object"]["radius"] / 2)
+    return ok
+
+
+def test_exactly_one_recess_is_empty_and_it_is_the_target():
+    """Five seated pieces carry knobs; the circle recess is empty. That difference is
+    the only thing distinguishing the insertion target from five distractors, and the
+    sim drew all six the same until 2026-08-15."""
+    recesses = CFG["board"]["recesses"]
+    empty = [r["id"] for r in recesses if not r.get("filled", True)]
+    ok = check("exactly one recess is empty", len(empty) == 1, f"empty: {empty}")
+    ok &= check("the empty one is the circle", empty == ["circle"], f"empty: {empty}")
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (
@@ -189,6 +235,9 @@ if __name__ == "__main__":
         test_translation_moves_everything_equally,
         test_no_variation_is_identity,
         test_peg_does_not_intersect_the_board,
+        test_peg_matches_the_circle_recess,
+        test_knob_matches_the_drawing,
+        test_exactly_one_recess_is_empty_and_it_is_the_target,
     ):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()
