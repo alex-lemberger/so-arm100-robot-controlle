@@ -16,7 +16,7 @@ change that. **Stop the Run D thread. Rebuild the datasets first.**
 
 | Artifact | Cameras | Hardware result |
 |---|---|---|
-| `smolvla_circle_insert_50ep_30000` (pre-Isaac baseline) | overview + **wrist** | **3/10** |
+| `smolvla_circle_insert_50ep_30000` (pre-Isaac baseline) | overview + **wrist** | ~~3/10~~ **unknown** -- see the correction at the end of this doc; the 3/10 belongs to `..._trimmed_20000/020000`, which scored **0/10** on 2026-08-15 |
 | Dataset A `circle_grasp_v1_real10` | overview only | 0/20 |
 | Dataset B `circle_grasp_v1_real50` | overview only | 0/20 |
 | Dataset C `circle_grasp_v1_mixed_10r_100s` | overview only | 0/20 |

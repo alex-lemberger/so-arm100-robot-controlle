@@ -78,6 +78,67 @@ the TRIMMED, batch-32, 20k-step run** (docs/windows-gpu-training-run-grasp-v1.md
 2026-08-14 were spent on that wrong checkpoint; its 0/10 and 2/10 results are
 not evidence about the harness, the hardware, or the board.
 
+**R0 was finally run against that correct checkpoint on 2026-08-15: 0/10.**
+Grasp succeeded on 2 of 10 episodes, insert on none. Board (6.4px/~4mm), peg
+(~7px/~4mm) and ports were all verified beforehand. The failure matches the
+checkpoint's *documented* signature exactly -- windows-gpu-training-run-grasp-v1.md:
+"the arm reaches the disc and loses it at or just after closing the gripper" --
+so this is the known-weak grasp phase, not a new fault.
+
+**The 3/10 has never been reproduced on this machine.** It was already the
+"previous best" in docs/linux-session-handover-2026-08-10.md, i.e. measured on
+the Mac setup on or before 2026-08-10; the hardware moved here 2026-08-11.
+Treat 3/10 as a pre-move number, not a target this setup has ever hit. There is
+no known-good reference on this machine at that point -- see below, that changed the same day.
+
+Teleop check the same day: **5/5 solid grasps by hand** through the same
+gripper (`./teleop_check.sh`). The gripper and the 5.2V rail are cleared --
+poor autonomous grasp is not a hardware fault. Review of the R0 rollout's own
+footage shows the arm reaching the peg in nearly every episode and failing at
+the moment of closing, matching the documented signature. Perception is
+locating the peg despite the workspace reading ~15-20% darker than the demos
+(rollout V 151-164 vs demo V 180-188), so illumination is a real distribution
+shift but not what breaks the grasp.
+
+### The current best checkpoint on this machine
+
+```
+outputs/train/smolvla_circle_grasp_v1_20000/checkpoints/020000/pretrained_model
+```
+
+Run it with `./run_eval_grasp_v1.sh <tag>`. Trained on `circle_grasp_v1`
+(81 eps, 31,541 frames, ~5x the grasp coverage of the trimmed run, 2 task
+strings), two cameras, 450M params. It had never been evaluated on hardware
+until 2026-08-15 -- the 08-10 handover recorded "Checkpoint has not been
+evaluated on hardware yet", then the PC move, the missing Linux eval image and
+the Isaac work buried it for five days.
+
+**Result 2026-08-15 (`rollout_grasp_v1_r1`), 8 of 10 episodes phase-logged:
+grasp 4/8, transport 4/8, insert 1/8** -- including the first completed
+insertion ever performed on this machine.
+
+| phase | R0 (`trimmed_20000`) | `circle_grasp_v1_20000` | Fisher p |
+|---|---|---|---|
+| grasp | 2/10 | 4/8 | 0.32 |
+| transport | 0/10 | 4/8 | **0.023** |
+| insert | 0/10 | 1/8 | -- |
+
+**Transport is the result that holds up statistically.** R0 never transported
+once in 10; this checkpoint transported in every episode where it got a grasp.
+The grasp improvement is real-looking but within noise at n=8 -- do not quote
+it as established. The single insertion is an existence proof, not a rate.
+
+**This is the first known-good reference on this machine**, which is what
+every A/B comparison since the move has lacked. Treat it as the baseline any
+new policy must beat, and re-measure it (10 episodes, same protocol) before
+trusting a comparison against it.
+
+Two failure modes remain, and they are distinct -- log them separately:
+- **no grasp** (4/8) -- still the biggest single loss.
+- **carried to the board but never released** (seen in both this run and R0):
+  the arm transports and then holds on. It is not dropping short; it never
+  reaches the state that triggers the open.
+
 Datasets A/B/C (`circle_grasp_v1_real10`, `circle_grasp_v1_real50`,
 `circle_grasp_v1_mixed_10r_100s`) and `grasp_v1_dagger1` are
 **overview-only** — `scripts/export_lerobot_dataset.py` drops the wrist
