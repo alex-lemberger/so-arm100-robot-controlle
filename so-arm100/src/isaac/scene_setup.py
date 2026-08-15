@@ -10,7 +10,7 @@ than a raised platform, and for where the object dimensions/position came from.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 def load_scene_config(config_path: str | Path) -> dict[str, Any]:
@@ -43,6 +43,104 @@ def _quat_multiply_wxyz(q1, q2):
             w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
         ]
     )
+
+
+# Rendered frames needed after a lighting change before the RTX renderer settles on
+# the new exposure. MEASURED 2026-08-15: after setting the intensity attribute the
+# frame mean walks from the old value to the new one over ~10 frames (at scale 0.75
+# it went 163.6 -> 149.5 and was still moving at frame 8), even though the USD
+# attribute reads back the new value immediately. Anything that changes the lighting
+# and then captures must burn at least this many rendered steps first, or the opening
+# frames of each episode carry the PREVIOUS episode's lighting -- an artifact
+# correlated with episode order, which is the worst kind.
+LIGHT_CONVERGENCE_STEPS = 15
+
+
+class SceneLights(NamedTuple):
+    """Handles for re-tuning the scene lights per synthetic episode without
+    redefining the prims. Base values are captured at creation so a variation is
+    always a scale/offset from the approved scene, never a compounding drift."""
+
+    dome_intensity_attr: Any
+    distant_intensity_attr: Any
+    distant_rotate_op: Any
+    base_dome_intensity: float
+    base_distant_intensity: float
+    base_distant_rotation_deg: tuple[float, float, float]
+
+
+def _rotate_xyz_op(xformable):
+    """Reuse the prim's existing rotateXYZ op if it has one. AddRotateXYZOp() raises
+    on a prim that already carries the op, which is exactly what happens when a stage
+    is re-opened or a light is defined twice in one process."""
+    from pxr import UsdGeom
+
+    for op in xformable.GetOrderedXformOps():
+        if op.GetOpType() == UsdGeom.XformOp.TypeRotateXYZ:
+            return op
+    return xformable.AddRotateXYZOp()
+
+
+def add_lighting(scene_cfg: dict[str, Any]) -> SceneLights:
+    """Define the scene's dome + distant lights from `scene_cfg["lighting"]`.
+
+    Lived inline in scripts/export_lerobot_dataset.py until 2026-08-15, with the
+    intensities hard-coded. It moved here so the values are configurable and, more
+    to the point, so they can be randomized per episode -- lighting is one of the
+    few axes that is genuinely label-preserving under verbatim action copying (it
+    changes the pixels and nothing about where anything is).
+
+    The fallback defaults below are the OLD hard-coded numbers, deliberately: a config
+    with no `lighting:` section reproduces pre-2026-08-15 frames exactly. They are not
+    good values -- they clip 37% of the frame at 255 (see configs/simulation.yaml,
+    which sets far lower ones). They exist so old behaviour is reproducible, not so it
+    is recommended.
+
+    Only call this from a script that has already booted Isaac's interpreter.
+    """
+    import omni.usd
+    from pxr import UsdGeom, UsdLux
+
+    cfg = scene_cfg.get("lighting", {})
+    dome_intensity = float(cfg.get("dome_intensity", 2000.0))
+    distant_intensity = float(cfg.get("distant_intensity", 20000.0))
+    distant_rotation = tuple(float(v) for v in cfg.get("distant_rotation_deg", [-45.0, 30.0, 0.0]))
+
+    stage = omni.usd.get_context().get_stage()
+    dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+    distant = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
+    rotate_op = _rotate_xyz_op(UsdGeom.Xformable(distant.GetPrim()))
+    rotate_op.Set(distant_rotation)
+
+    return SceneLights(
+        dome_intensity_attr=dome.CreateIntensityAttr(dome_intensity),
+        distant_intensity_attr=distant.CreateIntensityAttr(distant_intensity),
+        distant_rotate_op=rotate_op,
+        base_dome_intensity=dome_intensity,
+        base_distant_intensity=distant_intensity,
+        base_distant_rotation_deg=distant_rotation,
+    )
+
+
+def apply_lighting_variation(lights: SceneLights, variation) -> None:
+    """Scale both lights' intensity and swing the distant light's azimuth, per
+    `augmentation.randomization.Variation`. Label-preserving: it changes only how
+    the scene is lit, so the parent episode's copied actions stay exactly correct.
+
+    Reads the variation's light fields with getattr defaults, because episode JSON
+    written before 2026-08-15 has no light fields at all -- those records must
+    re-export at the original baseline lighting, not crash or drift.
+
+    The change is NOT visible in the next rendered frame: burn `LIGHT_CONVERGENCE_STEPS`
+    rendered steps before capturing anything.
+    """
+    scale = float(getattr(variation, "light_intensity_scale", 1.0))
+    yaw = float(getattr(variation, "distant_light_yaw_deg", 0.0))
+
+    lights.dome_intensity_attr.Set(lights.base_dome_intensity * scale)
+    lights.distant_intensity_attr.Set(lights.base_distant_intensity * scale)
+    rx, ry, rz = lights.base_distant_rotation_deg
+    lights.distant_rotate_op.Set((rx, ry, rz + yaw))
 
 
 def add_table_and_object(world, scene_cfg: dict[str, Any]):

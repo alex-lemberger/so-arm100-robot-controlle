@@ -5,10 +5,7 @@ is a picture: an empty or mis-aimed frame is exactly the failure the 08-11
 camera bug produced while every individual check passed. So this writes PNGs to
 look at, and also asserts numerically that the camera moved with its link.
 
-    docker run --rm --gpus all -v "$(pwd)/..:$(pwd)/.." \
-        -v /media/alex/F6E48479E4843DBD/Users:/media/alex/F6E48479E4843DBD/Users:ro \
-        -w "$(pwd)" leisaac-sim:latest \
-        /workspace/isaaclab/_isaac_sim/python.sh tests/smoke_wrist_camera_isaac.py
+    ./sim_docker.sh tests/smoke_wrist_camera_isaac.py
 """
 import sys
 import traceback

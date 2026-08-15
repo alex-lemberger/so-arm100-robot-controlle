@@ -221,11 +221,16 @@ def main() -> None:
             warm_up,
         )
         from isaac.replay_loop import settle_to_first_frame  # noqa: E402
-        from isaac.scene_setup import add_table_and_object, apply_variation, load_scene_config  # noqa: E402
+        from isaac.scene_setup import (  # noqa: E402
+            LIGHT_CONVERGENCE_STEPS,
+            add_lighting,
+            add_table_and_object,
+            apply_lighting_variation,
+            apply_variation,
+            load_scene_config,
+        )
         from isaacsim.core.utils.types import ArticulationAction
-        from pxr import UsdLux
         import omni.replicator.core as rep
-        import omni.usd
 
         cfg = yaml.safe_load(Path(args.config).read_text())
         usd_path = cfg["isaac_robot"]["asset_path"]
@@ -239,11 +244,18 @@ def main() -> None:
         robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
         scene_object, scene_material = add_table_and_object(world, scene_cfg)
 
-        stage = omni.usd.get_context().get_stage()
-        UsdLux.DomeLight.Define(stage, "/World/DomeLight").CreateIntensityAttr(2000)
-        distant = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
-        distant.CreateIntensityAttr(20000)
-        distant.AddRotateXYZOp().Set((-45.0, 30.0, 0.0))
+        lights = add_lighting(scene_cfg)
+        # The settle phase is the only thing between a lighting change and the first
+        # captured frame, so it has to be long enough for the renderer to converge on
+        # the new exposure. At the default 60 it is, by a wide margin -- this guards
+        # the case where someone shortens it to speed up an export and silently gets
+        # the previous episode's lighting on every episode's opening frames.
+        if args.settle_steps < LIGHT_CONVERGENCE_STEPS:
+            raise ValueError(
+                f"--settle-steps {args.settle_steps} is below LIGHT_CONVERGENCE_STEPS "
+                f"({LIGHT_CONVERGENCE_STEPS}); the first frames of each episode would be lit "
+                "by the previous episode's variation. See src/isaac/scene_setup.py."
+            )
         wrist_cfg = scene_cfg.get("wrist_camera")
         if wrist_cfg is None:
             raise ValueError(
@@ -287,6 +299,11 @@ def main() -> None:
 
             world.reset()
             apply_variation(scene_object, scene_material, scene_cfg["object"], variation)
+            # Lighting is re-applied per episode from the recorded Variation, and is
+            # always a scale from the config's base -- never a nudge to the previous
+            # episode's value, which would drift the dataset darker or brighter as it
+            # went.
+            apply_lighting_variation(lights, variation)
             start_pose = np.zeros(len(robot.dof_names), dtype=np.float32)
             start_pose[reorder[:5]] = np.deg2rad(variation.robot_joint_noise_deg)
             robot.set_joint_positions(start_pose)

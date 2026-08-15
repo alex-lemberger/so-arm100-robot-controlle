@@ -70,12 +70,10 @@ def main() -> int:
         from isaacsim.core.api.robots import Robot
         from isaacsim.core.utils.stage import add_reference_to_stage
         import omni.replicator.core as rep
-        import omni.usd
-        from pxr import Gf, UsdLux
 
         sys.path.insert(0, str(REPO_ROOT / "src"))
         from isaac.camera_capture import capture_rgb, create_camera, warm_up
-        from isaac.scene_setup import add_board, add_table_and_object
+        from isaac.scene_setup import add_board, add_lighting, add_table_and_object
 
         robot_cfg = yaml.safe_load(Path(args.robot_config).read_text())
         world = World(stage_units_in_meters=1.0, physics_dt=1 / 30, rendering_dt=1 / 30)
@@ -84,11 +82,13 @@ def main() -> int:
         add_table_and_object(world, scene_cfg)
         add_board(world, scene_cfg)
 
-        stage = omni.usd.get_context().get_stage()
-        UsdLux.DomeLight.Define(stage, "/World/DomeLight").CreateIntensityAttr(1000)
-        distant = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
-        distant.CreateIntensityAttr(2500)
-        distant.AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 45.0))
+        # Lit from `lighting:` in the scene config, i.e. the SAME lights
+        # scripts/export_lerobot_dataset.py uses. Until 2026-08-15 this rendered at
+        # dome 1000 / distant 2500 at a different azimuth while the exporter shipped
+        # dome 2000 / distant 20000 -- so the picture a human approved was not lit
+        # like the frames that went into training, which is most of what a scene gate
+        # is for. If the side-by-side now looks wrong, that is the finding.
+        add_lighting(scene_cfg)
 
         world.reset()
 

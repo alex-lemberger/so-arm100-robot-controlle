@@ -86,7 +86,7 @@ def main() -> None:
     sys.path.insert(0, str(repo_src))
     from bridge.trajectory_converter import convert_episode, load_robot_mapping  # noqa: E402
     from bridge.validation import validate_replay, save_validation_result  # noqa: E402
-    from isaac.scene_setup import add_table_and_object, load_scene_config  # noqa: E402
+    from isaac.scene_setup import add_lighting, add_table_and_object, load_scene_config  # noqa: E402
     from isaac.replay_loop import run_replay, settle_to_first_frame  # noqa: E402
     from isaac.camera_capture import capture_rgb, create_camera, warm_up  # noqa: E402
 
@@ -103,6 +103,7 @@ def main() -> None:
     robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
 
     scene_object = None
+    scene_cfg: dict = {}   # stays empty without --scene-config; add_lighting then uses its defaults
     if args.scene_config:
         print(f"Adding table + object from {args.scene_config}")
         scene_cfg = load_scene_config(args.scene_config)
@@ -110,17 +111,12 @@ def main() -> None:
 
     camera = None
     if args.capture_dir:
-        from pxr import UsdLux
-        import omni.usd
-
         # so100.usd has no lights of its own -- without one the RTX render is just black.
         # RTX physically-based lighting needs much higher intensity (thousands of nits)
         # than a typical "reasonable-sounding" value to produce visible exposure.
-        stage = omni.usd.get_context().get_stage()
-        UsdLux.DomeLight.Define(stage, "/World/DomeLight").CreateIntensityAttr(2000)
-        distant = UsdLux.DistantLight.Define(stage, "/World/DistantLight")
-        distant.CreateIntensityAttr(20000)
-        distant.AddRotateXYZOp().Set((-45.0, 30.0, 0.0))
+        # Values live in the scene config's `lighting:` section (see scene_setup.py);
+        # the numbers that used to be inline here are that section's defaults.
+        add_lighting(scene_cfg)
 
         out_dir = Path(args.capture_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

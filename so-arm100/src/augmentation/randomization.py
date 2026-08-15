@@ -11,10 +11,12 @@ scripts/generate_synthetic.py copies the parent episode's action trajectory
 VERBATIM (Rule 4: motion is not re-planned at this stage). That makes an axis
 safe to randomize only if moving it leaves those copied actions correct:
 
-  label-preserving -- mass_scale, friction_scale, robot_initial_joint_noise_deg
-    (spent before the settle-to-frame-0 phase), camera_pixel_noise_std, and
-    object_rotation_deg.yaw (the peg is a cylinder, so yaw is geometrically a
-    no-op -- this stops being true the moment a non-symmetric object is used).
+  label-preserving -- light_intensity_scale and distant_light_yaw_deg (they change
+    only how the scene is lit), mass_scale, friction_scale,
+    robot_initial_joint_noise_deg (spent before the settle-to-frame-0 phase),
+    camera_pixel_noise_std, and object_rotation_deg.yaw (the peg is a cylinder, so
+    yaw is geometrically a no-op -- this stops being true the moment a
+    non-symmetric object is used).
 
   label-breaking -- object_position, board_position, board_rotation_deg. These
     move the thing the trajectory was reaching for while the labels still say
@@ -60,6 +62,11 @@ class Variation:
     # Provenance, added 2026-08-15: records whether the pose axes above were allowed
     # to be non-zero, so a dataset can be audited from its own episode records.
     label_breaking_applied: bool = False
+    # Lighting, added 2026-08-15. Defaults are the neutral scene, so episode JSON
+    # written before this field existed reconstructs via Variation(**record) and
+    # re-exports at the original baseline lighting rather than crashing or drifting.
+    light_intensity_scale: float = 1.0
+    distant_light_yaw_deg: float = 0.0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -98,6 +105,8 @@ def sample_variation(
     friction_cfg = randomization_cfg["friction_scale"]
     joint_noise_deg = randomization_cfg.get("robot_initial_joint_noise_deg", 0.0)
     camera_noise_std = randomization_cfg.get("camera_pixel_noise_std", 0.0)
+    light_cfg = randomization_cfg.get("light_intensity_scale")
+    light_yaw_cfg = randomization_cfg.get("distant_light_yaw_deg")
 
     # Draw order below is FROZEN. Every draw keeps the position it had when the
     # dataset that used it was generated, so a given seed still reproduces the exact
@@ -118,6 +127,12 @@ def sample_variation(
     board_offset_y = float(rng.uniform(*board_pos_cfg["y"])) if board_pos_cfg else 0.0
     board_yaw_deg = float(rng.uniform(*board_yaw_cfg)) if board_yaw_cfg else 0.0
 
+    # Lighting draws are appended after the board's for the same reason the board's
+    # were appended after the object's: every earlier draw keeps its position in the
+    # stream, so a seed still reproduces the exact pre-lighting variation.
+    light_intensity_scale = float(rng.uniform(light_cfg["min"], light_cfg["max"])) if light_cfg else 1.0
+    distant_light_yaw_deg = float(rng.uniform(*light_yaw_cfg)) if light_yaw_cfg else 0.0
+
     if not allow_label_breaking:
         object_offset_x = object_offset_y = 0.0
         board_offset_x = board_offset_y = board_yaw_deg = 0.0
@@ -134,4 +149,6 @@ def sample_variation(
         board_offset_y=board_offset_y,
         board_yaw_deg=board_yaw_deg,
         label_breaking_applied=bool(allow_label_breaking),
+        light_intensity_scale=light_intensity_scale,
+        distant_light_yaw_deg=distant_light_yaw_deg,
     )

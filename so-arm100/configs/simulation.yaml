@@ -145,6 +145,20 @@ randomization:
   friction_scale:
     min: 0.8
     max: 1.2
+  # Lighting. Added 2026-08-15, and the one axis here with a measured target rather
+  # than a spec default: rollout_grasp_v1_r1's workspace read V 151-164 against the
+  # training demos' V 180-188, i.e. the real scene runs at ~0.80-0.91 of the
+  # brightness the policy was trained under. The range below reaches 0.75 so 0.80
+  # sits inside the training distribution rather than at its edge, and 1.15 on the
+  # bright side so the policy is not merely re-tuned to a darker room.
+  # Scales BOTH lights (see `lighting:` below for the base values).
+  light_intensity_scale:
+    min: 0.75
+    max: 1.15
+  # Azimuth swing of the key light, in degrees, added to `lighting.distant_rotation_deg`'s
+  # Z. Moves the shadows rather than the brightness -- the other thing that changes
+  # when the room's light source moves or the blind is half-open.
+  distant_light_yaw_deg: [-25, 25]
   # Not in AGENTS_NEW.md's example block, but Sec 16's prose also lists these two:
   robot_initial_joint_noise_deg: 3.0   # +/- jitter (per arm joint) applied before the
                                         # settle-to-frame-0 phase, not to the replay itself
@@ -182,6 +196,27 @@ randomization:
       y: [-0.03, 0.03]
     board_rotation_deg:
       yaw: [-10, 10]
+
+# Scene lighting. Hard-coded inline in scripts/export_lerobot_dataset.py until
+# 2026-08-15 at dome 2000 / distant 20000 -- and MEASURED on 2026-08-15 to be badly
+# blown out at those values: mean pixel 245/255 with 37% of pixels clipped at 255
+# (tests/smoke_lighting_isaac.py, sweep in the same session). Every synthetic frame
+# ever exported was clipped, and light_intensity_scale moved the mean by 0.1% because
+# there was no headroom left to move into.
+#
+# Values below are picked off that sweep to sit in the linear region with room for
+# the +15% end of light_intensity_scale, and to land near the real demos' measured
+# brightness (V 180-188; the sweep's whole-frame RGB mean is a rougher measure than
+# an HSV patch, so treat this as the right order of magnitude, not a calibration).
+#
+# Still NOT calibrated against the real room, and distant_rotation_deg in particular
+# is inherited, not measured -- the real key light's direction is unknown.
+# scripts/check_scene_gate.py now renders with these too, so the side-by-side finally
+# shows what actually gets exported. Re-approve the gate after changing them.
+lighting:
+  dome_intensity: 250
+  distant_intensity: 625
+  distant_rotation_deg: [-45.0, 30.0, 0.0]   # XYZ euler on the key light
 
 camera:
   # Rough top-down framing matching observation.images.overview's angle. Not

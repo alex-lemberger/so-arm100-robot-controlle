@@ -69,9 +69,20 @@ recalibration and an invalid eval result).
 **`./run_tests.sh`** — every `tests/test_*.py`, in `lerobot-train:latest`.
 `./run_tests.sh <pattern>` filters by filename. There is no native Python env
 on this machine (no numpy outside the images), so tests only ever run in a
-container; this is the non-hardware counterpart to `hw_docker.sh`. The
-`tests/smoke_*_isaac.py` files are excluded — they need `leisaac-sim:latest`
-and a display.
+container; this is the non-hardware counterpart to `hw_docker.sh`.
+
+The `tests/smoke_*_isaac.py` files boot Isaac and are **not** in that run.
+Go through **`./sim_docker.sh <script> [args]`** for those and for anything
+else that needs `leisaac-sim:latest`:
+
+```bash
+./sim_docker.sh tests/smoke_lighting_isaac.py     # writes lighting_smoke/*.png
+./sim_docker.sh tests/smoke_wrist_camera_isaac.py
+```
+
+Never hand-write that `docker run` line. Omitting its `/Users` read-only
+mount (where the robot USD lives) surfaces as an `is_homogeneous` assertion
+deep inside articulation init, which looks nothing like a missing mount.
 
 ## Synthetic data: label-preserving vs label-breaking
 
@@ -90,6 +101,36 @@ copied actions stay correct after it moves.
   unless `--allow-label-breaking` is passed. **Do not pass it** until the
   actions are re-planned per variation, which needs IK (the repo has forward
   kinematics only).
+
+### Lighting
+
+`lighting:` in `configs/simulation.yaml` holds the scene lights, and
+`randomization.light_intensity_scale` / `distant_light_yaw_deg` jitter them per
+episode. Lighting is the one label-preserving axis that targets something
+measured: the rollout workspace read V 151–164 against the demos' V 180–188.
+
+Two things that were found by measuring rather than reading the code, and that
+will silently break this axis again if forgotten:
+
+- **The old hard-coded lighting (dome 2000 / distant 20000) blew the render
+  out** — mean pixel 245/255 with **37% of pixels clipped**. Scaling intensity
+  moved the frame mean by 0.1%, because there was no headroom. Every synthetic
+  frame exported before 2026-08-15 was clipped like this. The base is now
+  dome 250 / distant 625: mean ~167, nothing clipped, and the ±scale range
+  produces a real 15% swing. `tests/smoke_lighting_isaac.py` asserts the
+  bright end still doesn't clip.
+- **A lighting change takes ~10 rendered frames to appear.** The USD attribute
+  reads back immediately but the RTX render walks to the new exposure.
+  `LIGHT_CONVERGENCE_STEPS` (15, in `src/isaac/scene_setup.py`) is the burn-in;
+  the exporter refuses `--settle-steps` below it, since otherwise each
+  episode's opening frames carry the *previous* episode's lighting — an
+  artifact correlated with episode order.
+
+`scripts/check_scene_gate.py` renders with these same lights as of 2026-08-15.
+It previously used dome 1000 / distant 2500 at a different azimuth, so the
+side-by-side a human approved was not lit like the frames that went to
+training. **The gate approval is stale — re-run `./check_scene_gate.sh` and
+look at the picture before generating or exporting anything.**
 
 `data/synthetic/circle_grasp_v1/` (100 episodes, pre-2026-08-15) was
 generated with the pose axes live and is mislabelled — see the

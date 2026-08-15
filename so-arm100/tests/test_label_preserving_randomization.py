@@ -26,7 +26,8 @@ from augmentation.randomization import sample_variation  # noqa: E402
 CFG = yaml.safe_load((ROOT / "configs" / "simulation.yaml").read_text())
 RCFG = CFG["randomization"]
 POSE_FIELDS = ("object_offset_x", "object_offset_y", "board_offset_x", "board_offset_y", "board_yaw_deg")
-PRESERVING_FIELDS = ("yaw_deg", "mass_scale", "friction_scale", "robot_joint_noise_deg", "camera_noise_std")
+PRESERVING_FIELDS = ("yaw_deg", "mass_scale", "friction_scale", "robot_joint_noise_deg",
+                     "camera_noise_std", "light_intensity_scale", "distant_light_yaw_deg")
 
 
 def check(name, cond, detail=""):
@@ -99,6 +100,70 @@ def test_shipped_config_has_no_top_level_pose_keys():
     return ok
 
 
+def test_lighting_varies_without_any_opt_in():
+    """Lighting is label-preserving, so it must be live in the shipped config with no
+    flag. If this fails the synthetic data has no visual variation at all -- which is
+    what it had between the pose gate landing and the lighting axis arriving."""
+    vs = [sample_variation(RCFG, seed=s) for s in range(200)]
+    scales = [v.light_intensity_scale for v in vs]
+    yaws = [v.distant_light_yaw_deg for v in vs]
+    lo, hi = RCFG["light_intensity_scale"]["min"], RCFG["light_intensity_scale"]["max"]
+    ylo, yhi = RCFG["distant_light_yaw_deg"]
+
+    ok = check("intensity scale varies by default", len(set(scales)) > 100)
+    ok &= check("intensity scale within configured range", lo <= min(scales) and max(scales) <= hi,
+                f"[{min(scales):.3f}, {max(scales):.3f}] vs [{lo}, {hi}]")
+    ok &= check("light yaw varies by default", len(set(yaws)) > 100)
+    ok &= check("light yaw within configured range", ylo <= min(yaws) and max(yaws) <= yhi,
+                f"[{min(yaws):.2f}, {max(yaws):.2f}] vs [{ylo}, {yhi}]")
+    # The whole justification: rollout_grasp_v1_r1 ran at ~0.80 of the demos'
+    # brightness (V 151-164 vs 180-188). That has to sit INSIDE the range, not at
+    # its edge, or the axis does not cover the shift it was added for.
+    ok &= check("range covers the measured 0.80 workspace darkening with margin", lo < 0.80,
+                f"min {lo} does not get below the measured 0.80")
+    return ok
+
+
+def test_lighting_draws_appended_last():
+    """Rule 10 again: the lighting draws must come after every pre-existing draw, so
+    a seed still reproduces the exact pre-lighting variation of data/synthetic/."""
+    stripped = {k: v for k, v in RCFG.items() if k not in ("light_intensity_scale", "distant_light_yaw_deg")}
+    ok = True
+    for seed in (0, 1, 42, 12345):
+        with_light = sample_variation(RCFG, seed=seed, allow_label_breaking=True)
+        without = sample_variation(stripped, seed=seed, allow_label_breaking=True)
+        same = all(
+            getattr(with_light, f) == getattr(without, f)
+            for f in ("object_offset_x", "object_offset_y", "yaw_deg", "mass_scale", "friction_scale",
+                      "robot_joint_noise_deg", "board_offset_x", "board_offset_y", "board_yaw_deg")
+        )
+        ok &= check(f"seed {seed}: pre-lighting draws unchanged by adding lighting", same)
+        ok &= check(f"seed {seed}: absent lighting config -> neutral lighting",
+                    without.light_intensity_scale == 1.0 and without.distant_light_yaw_deg == 0.0)
+    return ok
+
+
+def test_pre_lighting_records_reconstruct_neutral():
+    """scripts/export_lerobot_dataset.py rebuilds Variation(**record["randomization"]).
+    Records written before the lighting axis existed have no light fields; they must
+    reconstruct at baseline lighting rather than raising or picking up a random value."""
+    from dataclasses import fields
+
+    from augmentation.randomization import Variation
+
+    legacy = {f.name: getattr(sample_variation(RCFG, seed=3), f.name) for f in fields(Variation)}
+    for k in ("light_intensity_scale", "distant_light_yaw_deg", "label_breaking_applied"):
+        legacy.pop(k)
+    try:
+        v = Variation(**legacy)
+    except TypeError as exc:
+        return check("legacy record reconstructs", False, str(exc))
+    ok = check("legacy record reconstructs", True)
+    ok &= check("legacy record lights are neutral",
+                v.light_intensity_scale == 1.0 and v.distant_light_yaw_deg == 0.0)
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (
@@ -108,6 +173,9 @@ if __name__ == "__main__":
         test_provenance_records_the_choice,
         test_legacy_config_is_refused_not_silently_honoured,
         test_shipped_config_has_no_top_level_pose_keys,
+        test_lighting_varies_without_any_opt_in,
+        test_lighting_draws_appended_last,
+        test_pre_lighting_records_reconstruct_neutral,
     ):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()
