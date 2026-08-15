@@ -130,6 +130,11 @@ board:
   # (normalised on read in board_component_pose, so a rounded 0.7071 would not
   # silently rescale the board -- but keep it exact here anyway)
   color: [0.85, 0.72, 0.50]            # light birch ply
+  # Depth of a recess below the board's top face. The drawing's 8mm edge dimension;
+  # the pieces are the board's full 12mm and sit on a backing, which is why an empty
+  # recess shows a painted floor rather than the table through a hole. Only recesses
+  # with `filled: false` are actually cut -- a seated piece covers its own.
+  recess_depth: 0.008
   recesses:
     # offset is (x, y) in the BOARD's own frame (the DRAWING's orientation: +x
     # right, +y up), measured from the slab centre.

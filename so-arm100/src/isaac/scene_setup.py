@@ -412,6 +412,115 @@ def _disc_geom(stage, path: str, radius: float, thickness: float, color):
     return cyl
 
 
+def _ray_rect_hit(origin, direction, half_w: float, half_h: float):
+    """Where a ray leaving `origin` (inside an axis-aligned rectangle centred on 0)
+    crosses its boundary."""
+    ts = []
+    for d, o, half in ((direction[0], origin[0], half_w), (direction[1], origin[1], half_h)):
+        if abs(d) > 1e-12:
+            ts.append(((half if d > 0 else -half) - o) / d)
+    t = min(t for t in ts if t > 0)
+    return origin + t * direction
+
+
+def _ray_polygon_hit(origin, direction, verts):
+    """Where a ray leaving `origin` (inside the polygon) crosses its edges. Takes the
+    nearest forward crossing, so a slightly non-convex outline still works."""
+    best = None
+    n = len(verts)
+    for i in range(n):
+        a = verts[i]
+        b = verts[(i + 1) % n]
+        e = b - a
+        denom = direction[0] * (-e[1]) + direction[1] * e[0]
+        if abs(denom) < 1e-12:
+            continue
+        diff = a - origin
+        t = (diff[0] * (-e[1]) + diff[1] * e[0]) / denom
+        u = (diff[0] * (-direction[1]) + diff[1] * direction[0]) / denom
+        if t > 1e-9 and -1e-9 <= u <= 1 + 1e-9 and (best is None or t < best):
+            best = t
+    if best is None:
+        raise ValueError("ray from inside the polygon found no exit -- outline is malformed")
+    return origin + best * direction
+
+
+def _slab_with_pocket_mesh(stage, path: str, size, pocket_centre, pocket_verts,
+                           depth: float, board_color, floor_color):
+    """The board slab with a real blind pocket cut into its top face.
+
+    An empty recess has to be a HOLE. Drawing it as a disc lying on the surface --
+    which is what it was until 2026-08-15 -- reads as a sixth piece sitting in its
+    socket, and the empty socket is the one thing the policy has to find.
+
+    The top face is triangulated as a ring between the pocket outline and the slab's
+    outer boundary: both loops are sampled along the same sorted set of bearings taken
+    from the pocket's centre (the pocket's own vertices, plus the four slab corners so
+    the outline stays exactly rectangular). Because the slab is convex and contains
+    that centre, corresponding points never cross and the ring tiles the face once.
+    """
+    import numpy as np
+    from pxr import Gf, UsdGeom, UsdPhysics, Vt
+
+    sx, sy, sz = size
+    hw, hh, hz = sx / 2.0, sy / 2.0, sz / 2.0
+    centre = np.asarray(pocket_centre, dtype=np.float64)
+    hole = np.asarray(pocket_verts, dtype=np.float64) + centre
+
+    corners = np.array([[hw, hh], [-hw, hh], [-hw, -hh], [hw, -hh]], dtype=np.float64)
+    rel = np.vstack([hole - centre, corners - centre])
+    bearings = sorted({round(float(np.arctan2(v[1], v[0])), 9) for v in rel})
+    dirs = np.array([[np.cos(a), np.sin(a)] for a in bearings])
+
+    inner = np.array([_ray_polygon_hit(centre, d, hole) for d in dirs])
+    outer = np.array([_ray_rect_hit(centre, d, hw, hh) for d in dirs])
+    n = len(dirs)
+    floor_z = hz - depth
+
+    pts, counts, idx = [], [], []
+
+    def add(p):
+        pts.append(Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])))
+        return len(pts) - 1
+
+    inner_top = [add((p[0], p[1], hz)) for p in inner]
+    outer_top = [add((p[0], p[1], hz)) for p in outer]
+    outer_bot = [add((p[0], p[1], -hz)) for p in outer]
+    inner_floor = [add((p[0], p[1], floor_z)) for p in inner]
+    floor_hub = add((centre[0], centre[1], floor_z))
+
+    for i in range(n):
+        j = (i + 1) % n
+        counts.append(4); idx += [inner_top[i], inner_top[j], outer_top[j], outer_top[i]]
+        counts.append(4); idx += [outer_top[j], outer_bot[j], outer_bot[i], outer_top[i]]
+        counts.append(4); idx += [inner_top[j], inner_top[i], inner_floor[i], inner_floor[j]]
+        counts.append(3); idx += [floor_hub, inner_floor[i], inner_floor[j]]
+        counts.append(3); idx += [outer_bot[j], outer_bot[i], outer_bot[0]]
+
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.CreatePointsAttr(Vt.Vec3fArray(pts))
+    mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(idx))
+    mesh.CreateSubdivisionSchemeAttr("none")
+    mesh.CreateExtentAttr([(-hw, -hh, -hz), (hw, hh, hz)])
+
+    # Per-face colour so the pocket floor keeps the recess's paint while the rest of
+    # the slab stays birch -- the floor is what you see through the hole, and in
+    # board_reference_demo.png it is teal with "circle" printed on it.
+    colors = []
+    for _ in range(n):
+        colors += [Gf.Vec3f(*board_color)] * 3 + [Gf.Vec3f(*floor_color), Gf.Vec3f(*board_color)]
+    assert len(colors) == len(counts), (len(colors), len(counts))
+    attr = mesh.CreateDisplayColorAttr(Vt.Vec3fArray(colors))
+    attr.SetMetadata("interpolation", "uniform")
+
+    # The slab was a FixedCuboid, i.e. a collider. Keep it one, but as the exact
+    # triangle mesh -- so the hole is a hole to physics too, not just to the camera.
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+    return mesh
+
+
 def add_board(world, scene_cfg: dict[str, Any]):
     """Add the shape-sorter board -- slab, one visual marker per recess, and a knob
     on each recess whose piece is SEATED (`filled: true`) -- to `world.scene`. Returns a list of (handle, local_offset, local_quat_wxyz) for
@@ -441,17 +550,47 @@ def add_board(world, scene_cfg: dict[str, Any]):
 
     components: list[tuple[Any, Any, Any]] = []
 
+    board_color = list(board_cfg.get("color", [0.85, 0.72, 0.50]))
     slab_pos, slab_quat = board_component_pose(base_pos, base_quat, np.zeros(3), identity)
-    slab = world.scene.add(
-        FixedCuboid(
-            prim_path="/World/board_slab",
-            name="board_slab",
-            position=slab_pos.astype(np.float32),
-            orientation=slab_quat.astype(np.float32),
-            scale=np.array(size, dtype=np.float32),
-            color=np.array(board_cfg.get("color", [0.85, 0.72, 0.50]), dtype=np.float32),
+
+    # An EMPTY recess is cut out of the slab as a real blind pocket. Any recess whose
+    # piece is seated is covered by that piece, so it needs no hole.
+    empty = [r for r in board_cfg.get("recesses", []) if not r.get("filled", True)]
+    if len(empty) > 1:
+        raise NotImplementedError(
+            f"{[r['id'] for r in empty]} are all empty; the slab mesh cuts one pocket. "
+            "Extend _slab_with_pocket_mesh to tile between several holes first."
         )
-    )
+
+    if empty:
+        rec = empty[0]
+        verts = recess_verts(rec)
+        if verts is None:  # circle -- sample it densely enough to read as round
+            ang = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+            verts = np.stack([rec["radius"] * np.cos(ang), rec["radius"] * np.sin(ang)], axis=1)
+        slab = SingleXFormPrim(
+            prim_path="/World/board_slab", name="board_slab",
+            position=slab_pos.astype(np.float32), orientation=slab_quat.astype(np.float32),
+        )
+        _slab_with_pocket_mesh(
+            stage, "/World/board_slab/geom", size,
+            pocket_centre=rec["offset"],
+            pocket_verts=verts,
+            depth=float(board_cfg.get("recess_depth", 0.008)),
+            board_color=board_color,
+            floor_color=list(rec.get("color", [0.5, 0.5, 0.5])),
+        )
+    else:
+        slab = world.scene.add(
+            FixedCuboid(
+                prim_path="/World/board_slab",
+                name="board_slab",
+                position=slab_pos.astype(np.float32),
+                orientation=slab_quat.astype(np.float32),
+                scale=np.array(size, dtype=np.float32),
+                color=np.array(board_color, dtype=np.float32),
+            )
+        )
     components.append((slab, np.zeros(3), identity))
 
     disc_thickness = 0.002
@@ -463,12 +602,12 @@ def add_board(world, scene_cfg: dict[str, Any]):
         local_quat = _yaw_quat_wxyz(rec.get("yaw_deg", 0.0))
         pos, quat = board_component_pose(base_pos, base_quat, local_offset, local_quat)
         filled = rec.get("filled", True)
-        color = list(rec.get("color", [0.5, 0.5, 0.5]))
         if not filled:
-            # An empty recess is a painted floor sitting in shadow, not a piece
-            # standing on the surface. Darkening it is what stops the insertion
-            # TARGET from reading as a sixth seated piece.
-            color = [c * 0.65 for c in color]
+            # Nothing to add: this recess is the pocket cut into the slab above, and
+            # its paint is the pocket floor. Drawing a disc here as well is what made
+            # the empty socket look like a sixth seated piece.
+            continue
+        color = list(rec.get("color", [0.5, 0.5, 0.5]))
 
         # An Xform wrapper carrying the geometry as a child. The wrapper keeps unit
         # scale so the knob parented under it is not squashed (see _prism_mesh), and
@@ -487,12 +626,10 @@ def add_board(world, scene_cfg: dict[str, Any]):
             _prism_mesh(stage, f"{prim_path}/geom", verts, disc_thickness, color)
         components.append((handle, local_offset, local_quat))
 
-        # A SEATED piece carries a knob; an empty recess is a bare painted floor.
-        # That difference is the only thing marking the insertion target apart from
-        # the five distractors, so it is the last thing to leave out.
-        if filled:
-            _attach_knob(prim_path, knob_r, knob_h, knob_color,
-                         z_offset=disc_thickness / 2.0 + knob_h / 2.0)
+        # Every seated piece carries a knob. The empty recess has none, and that is
+        # the only thing marking the insertion target apart from five distractors.
+        _attach_knob(prim_path, knob_r, knob_h, knob_color,
+                     z_offset=disc_thickness / 2.0 + knob_h / 2.0)
 
     return components
 
