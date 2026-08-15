@@ -314,6 +314,104 @@ def board_component_pose(board_base_pos, board_base_quat_wxyz, local_offset, loc
     return world_pos, world_quat
 
 
+def _regular_polygon_verts(sides: int, side_length: float, apex_up: bool = True):
+    """Vertices of a regular N-gon, centred on its circumcentre, in the board's own
+    2D frame. `apex_up` puts a vertex at +y, which is how docs/reference/toy.png
+    draws both the triangle and the pentagon.
+
+    Circumradius from side length: R = s / (2 sin(pi/N)). Cross-checked against the
+    drawing: side 52 triangle -> 52.0 wide x 45.0 tall (measured 51.5 x 45.2);
+    side 32 pentagon -> 51.8 x 49.2 (measured 51.1 x 50.0).
+    """
+    import numpy as np
+
+    radius = side_length / (2.0 * np.sin(np.pi / sides))
+    start = np.pi / 2 if apex_up else 0.0
+    angles = start + np.arange(sides) * 2.0 * np.pi / sides
+    return np.stack([radius * np.cos(angles), radius * np.sin(angles)], axis=1)
+
+
+def _rect_verts(width: float, height: float):
+    import numpy as np
+
+    hw, hh = width / 2.0, height / 2.0
+    return np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], dtype=np.float64)
+
+
+def _rhombus_verts(width: float, height: float):
+    """A rhombus is NOT a rotated square. toy.png's diamond states side 42mm and is
+    drawn 45.9 wide x 68.5 tall -- markedly taller than wide. It was modelled as a
+    39mm square at yaw 45 until 2026-08-15, i.e. 55mm x 55mm: too narrow and far too
+    short. Diagonals are given directly here so the shape cannot drift back."""
+    import numpy as np
+
+    hw, hh = width / 2.0, height / 2.0
+    return np.array([[0.0, -hh], [hw, 0.0], [0.0, hh], [-hw, 0.0]], dtype=np.float64)
+
+
+def recess_verts(rec: dict[str, Any]):
+    """2D outline for a recess spec, or None for a circle (which stays an analytic
+    cylinder rather than a polygon approximation)."""
+    shape = rec["shape"]
+    if shape == "circle":
+        return None
+    if shape == "polygon":
+        return _regular_polygon_verts(int(rec["sides"]), float(rec["side"]))
+    if shape == "rect":
+        return _rect_verts(*rec["size"])
+    if shape == "rhombus":
+        return _rhombus_verts(*rec["size"])
+    raise NotImplementedError(f"Unsupported recess shape {shape!r} for {rec['id']!r}")
+
+
+def _prism_mesh(stage, path: str, verts_2d, thickness: float, color):
+    """Extrude a 2D outline into a flat prism as a UsdGeom.Mesh.
+
+    A mesh rather than a scaled primitive on purpose. The recesses were VisualCuboids
+    whose `scale` was the shape's size -- and USD scale is inherited by children, so
+    the knob parented under a 46mm x 46mm x 2mm piece was squashed by those same
+    factors and vanished. That is why the square, rectangle and diamond had no knobs
+    while the two cylinder-based recesses did. Mesh points carry the dimensions, the
+    prim keeps unit scale, and children stay the size they were built.
+    """
+    from pxr import Gf, UsdGeom, Vt
+
+    n = len(verts_2d)
+    hz = thickness / 2.0
+    points = [Gf.Vec3f(float(x), float(y), -hz) for x, y in verts_2d]
+    points += [Gf.Vec3f(float(x), float(y), +hz) for x, y in verts_2d]
+
+    counts = [n, n]
+    indices = list(range(n - 1, -1, -1))          # bottom, reversed so it faces -z
+    indices += list(range(n, 2 * n))              # top
+    for i in range(n):                            # side quads
+        j = (i + 1) % n
+        counts.append(4)
+        indices += [i, j, j + n, i + n]
+
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.CreatePointsAttr(Vt.Vec3fArray(points))
+    mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
+    mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*color)]))
+    mesh.CreateSubdivisionSchemeAttr("none")      # else it renders as a blob
+    xs = [v[0] for v in verts_2d]; ys = [v[1] for v in verts_2d]
+    mesh.CreateExtentAttr([(min(xs), min(ys), -hz), (max(xs), max(ys), hz)])
+    return mesh
+
+
+def _disc_geom(stage, path: str, radius: float, thickness: float, color):
+    from pxr import Gf, UsdGeom
+
+    cyl = UsdGeom.Cylinder.Define(stage, path)
+    cyl.CreateRadiusAttr(radius)
+    cyl.CreateHeightAttr(thickness)
+    cyl.CreateAxisAttr("Z")
+    cyl.CreateExtentAttr([(-radius, -radius, -thickness / 2), (radius, radius, thickness / 2)])
+    cyl.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+    return cyl
+
+
 def add_board(world, scene_cfg: dict[str, Any]):
     """Add the shape-sorter board -- slab, one visual marker per recess, and a knob
     on each recess whose piece is SEATED (`filled: true`) -- to `world.scene`. Returns a list of (handle, local_offset, local_quat_wxyz) for
@@ -327,8 +425,11 @@ def add_board(world, scene_cfg: dict[str, Any]):
     Must be called before `world.reset()`, same as the robot and the table.
     """
     import numpy as np
-    from isaacsim.core.api.objects import FixedCuboid, VisualCuboid, VisualCylinder
+    import omni.usd
+    from isaacsim.core.api.objects import FixedCuboid
+    from isaacsim.core.prims import SingleXFormPrim
 
+    stage = omni.usd.get_context().get_stage()
     board_cfg = scene_cfg.get("board")
     if board_cfg is None:
         return None
@@ -359,33 +460,38 @@ def add_board(world, scene_cfg: dict[str, Any]):
 
     for rec in board_cfg.get("recesses", []):
         local_offset = np.array([rec["offset"][0], rec["offset"][1], local_z], dtype=np.float64)
-        # Per-recess yaw in the board's own frame: the diamond is a square plate
-        # turned 45 degrees. Stored with the component so it survives every
-        # subsequent board move rather than being re-derived.
         local_quat = _yaw_quat_wxyz(rec.get("yaw_deg", 0.0))
         pos, quat = board_component_pose(base_pos, base_quat, local_offset, local_quat)
-        color = np.array(rec.get("color", [0.5, 0.5, 0.5]), dtype=np.float32)
-        common = dict(
-            prim_path=f"/World/board_recess_{rec['id']}",
+        filled = rec.get("filled", True)
+        color = list(rec.get("color", [0.5, 0.5, 0.5]))
+        if not filled:
+            # An empty recess is a painted floor sitting in shadow, not a piece
+            # standing on the surface. Darkening it is what stops the insertion
+            # TARGET from reading as a sixth seated piece.
+            color = [c * 0.65 for c in color]
+
+        # An Xform wrapper carrying the geometry as a child. The wrapper keeps unit
+        # scale so the knob parented under it is not squashed (see _prism_mesh), and
+        # SingleXFormPrim gives apply_board_variation the set_world_pose it needs.
+        prim_path = f"/World/board_recess_{rec['id']}"
+        handle = SingleXFormPrim(
+            prim_path=prim_path,
             name=f"board_recess_{rec['id']}",
             position=pos.astype(np.float32),
             orientation=quat.astype(np.float32),
-            color=color,
         )
-        if rec["shape"] == "cylinder":
-            handle = world.scene.add(VisualCylinder(radius=rec["radius"], height=disc_thickness, **common))
-        elif rec["shape"] == "cuboid":
-            sx, sy = rec["size"]
-            handle = world.scene.add(VisualCuboid(scale=np.array([sx, sy, disc_thickness], dtype=np.float32), **common))
+        verts = recess_verts(rec)
+        if verts is None:
+            _disc_geom(stage, f"{prim_path}/geom", rec["radius"], disc_thickness, color)
         else:
-            raise NotImplementedError(f"Unsupported recess shape {rec['shape']!r} for {rec['id']!r}")
+            _prism_mesh(stage, f"{prim_path}/geom", verts, disc_thickness, color)
         components.append((handle, local_offset, local_quat))
 
         # A SEATED piece carries a knob; an empty recess is a bare painted floor.
         # That difference is the only thing marking the insertion target apart from
         # the five distractors, so it is the last thing to leave out.
-        if rec.get("filled", True):
-            _attach_knob(common["prim_path"], knob_r, knob_h, knob_color,
+        if filled:
+            _attach_knob(prim_path, knob_r, knob_h, knob_color,
                          z_offset=disc_thickness / 2.0 + knob_h / 2.0)
 
     return components

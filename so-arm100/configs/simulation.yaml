@@ -33,7 +33,9 @@ table:
 knob:
   radius: 0.0065        # 13mm across
   height: 0.013         # 13mm tall
-  color: [0.93, 0.90, 0.84]   # bare/cream wood, not the piece's paint
+  color: [0.85, 0.72, 0.50]   # the BOARD's birch, not the piece's paint -- the knobs
+                              # are bare wood in board_reference_demo.png, same
+                              # material as the slab they stand on
 
 object:
   id: circle_peg
@@ -43,16 +45,20 @@ object:
   # recess is 50mm exact, and the pieces are the board's own 12mm thickness.
   radius: 0.025  # 50mm diameter, exact
   height: 0.012
-  # PROVISIONAL, NOT MEASURED. The old [0.18, -0.05] was chosen when the board's
-  # position was a guess; with the board now measured at [0.152, 0, 0.005] that
-  # point falls INSIDE the board's footprint (x 0.065-0.239, y -0.087-0.087) and
-  # overlaps the slab in z as well, so the peg would spawn interpenetrating the
-  # board. Moved clear, keeping the same ~0.19m reach from the base
-  # (sqrt(0.14^2+0.13^2) = 0.191m) and sitting off the board's near-right corner
-  # roughly as it does in docs/reference/board_reference_demo.png.
-  # Replace with a real measurement of where the peg is actually placed --
-  # tests/test_board_randomization.py asserts only that it stays clear of the board.
-  position: [0.14, -0.13, 0.005]  # z = table top (-0.001) + half height (0.006)
+  # DERIVED from docs/reference/board_reference_demo.png on 2026-08-15, replacing a
+  # value that was explicitly provisional and, it turns out, on the WRONG SIDE.
+  #
+  # Method: locate five recesses in that frame by colour, least-squares fit the
+  # affine map from the board's own frame (whose recess centres are known from
+  # toy.png) to image pixels -- residuals came out at 2-6px on a 1280px frame --
+  # then invert the loose peg's pixel position through it. That puts the peg at
+  # (+165, -117)mm in the board frame; the board carries a 180-degree yaw, so in
+  # world terms that is (-0.165, -0.106).
+  #
+  # The old [0.14, -0.13] had the same reach from the base (0.191m vs 0.196m) and
+  # the opposite sign in x -- the peg sat on the wrong side of the robot, which is
+  # exactly what it looked like in the sim viewport.
+  position: [-0.165, -0.106, 0.005]  # z = table top (-0.001) + half height (0.006)
   rotation: [0.0, 0.0, 0.0, 1.0]  # x, y, z, w (identity) -- USD/ROS convention
   mass: 0.02   # kg, light wooden peg
   base_friction: 0.5   # both static and dynamic; Isaac default-ish, not measured on real wood/paper
@@ -127,19 +133,32 @@ board:
   recesses:
     # offset is (x, y) in the BOARD's own frame (the DRAWING's orientation: +x
     # right, +y up), measured from the slab centre.
-    # `filled` (added 2026-08-15) says whether the piece is SEATED in its recess.
-    # A seated piece carries a knob; an empty recess is a bare painted floor. In
+    # SHAPES, 2026-08-15. Every size below is the drawing's own stated dimension.
+    # Until now `triangle` and `pentagon` were `shape: cylinder` -- placeholders that
+    # were never replaced, so the two shapes simply were not in the scene, and the
+    # diamond was a 39mm square at yaw 45 (55x55mm) rather than the drawing's rhombus.
+    #
+    # `filled` says whether the piece is SEATED in its recess. A seated piece carries
+    # a knob; an empty recess is a bare painted floor, drawn darker. In
     # board_reference_demo.png five are seated and the circle is empty -- and the
-    # empty one is the insertion TARGET. The sim drew all six identically, so the
-    # hole the policy has to find looked exactly like the five it must ignore.
-    - {id: triangle,  offset: [-0.053,  0.027], shape: cylinder, radius: 0.019, color: [0.90, 0.50, 0.25], filled: true}
-    - {id: rectangle, offset: [ 0.002,  0.045], shape: cuboid,   size: [0.043, 0.063], color: [0.20, 0.35, 0.70], filled: true}
-    - {id: diamond,   offset: [ 0.054,  0.033], shape: cuboid,   size: [0.039, 0.039], yaw_deg: 45, color: [0.45, 0.25, 0.55], filled: true}
-    - {id: pentagon,  offset: [-0.053, -0.050], shape: cylinder, radius: 0.024, color: [0.20, 0.55, 0.35], filled: true}
-    - {id: square,    offset: [ 0.002, -0.023], shape: cuboid,   size: [0.046, 0.046], color: [0.88, 0.42, 0.35], filled: true}
+    # empty one is the insertion TARGET, so that difference is the only thing telling
+    # it apart from five distractors.
+    #
+    # `offset` is the shape's CENTRE (circumcentre for the regular polygons), measured
+    # off toy.png against its 174mm board: the drawing is to scale, and reading it that
+    # way reproduced every stated dimension it also labels (triangle side 52 -> 51.5
+    # measured, pentagon side 32 -> 51.1x50.0 vs 51.8x49.2 predicted, square 46 -> 46.2,
+    # circle 50 -> 50.3, diamond side 42 -> 41.2 implied from its diagonals).
+    - {id: triangle,  offset: [-0.0528,  0.0265], shape: polygon, sides: 3, side: 0.052,   color: [0.90, 0.50, 0.25], filled: true}
+    - {id: rectangle, offset: [ 0.0014,  0.0461], shape: rect,    size: [0.043, 0.063],    color: [0.20, 0.35, 0.70], filled: true}
+    # Side 42mm, drawn 45.9 wide x 68.5 tall -- a rhombus, markedly taller than wide.
+    # Diagonals below are that measured aspect scaled to the stated 42mm side.
+    - {id: diamond,   offset: [ 0.0551,  0.0332], shape: rhombus, size: [0.0468, 0.0698],  color: [0.45, 0.25, 0.55], filled: true}
+    - {id: pentagon,  offset: [-0.0520, -0.0516], shape: polygon, sides: 5, side: 0.032,   color: [0.20, 0.55, 0.35], filled: true}
+    - {id: square,    offset: [ 0.0014, -0.0226], shape: rect,    size: [0.046, 0.046],    color: [0.88, 0.42, 0.35], filled: true}
     # The one that matters: recess diameter 50mm, exact. Empty -- its piece is the
     # loose peg under `object:`, which is why that peg is 50mm too.
-    - {id: circle,    offset: [ 0.054, -0.049], shape: cylinder, radius: 0.025, color: [0.20, 0.55, 0.45], filled: false}
+    - {id: circle,    offset: [ 0.0532, -0.0489], shape: circle,  radius: 0.025,           color: [0.20, 0.55, 0.45], filled: false}
 
 # Domain randomization ranges for synthetic data generation (AGENTS_NEW.md Task 9 /
 # Sec 16 -- values below are copied verbatim from that section's example, i.e. the

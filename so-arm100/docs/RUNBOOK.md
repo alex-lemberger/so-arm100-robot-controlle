@@ -161,8 +161,30 @@ found by looking at the gate's side-by-side:
   0.02 and 0.025 — the sim showed a peg that could not have come out of the hole
   it gets inserted into. `tests/test_board_randomization.py` guards this now.
 - **`filled:` per recess.** A seated piece carries a knob; an empty recess is a
-  bare painted floor. The sim drew all six identically, so the hole the policy
-  has to find looked exactly like the five it must ignore.
+  bare painted floor, drawn darker. The sim drew all six identically, so the hole
+  the policy has to find looked exactly like the five it must ignore.
+- **Two shapes were not in the scene at all.** `triangle` and `pentagon` were
+  `shape: cylinder` placeholders that were never replaced, and the diamond was a
+  39mm square at yaw 45 (55x55mm) rather than the drawing's rhombus (side 42mm,
+  drawn 45.9 wide x 68.5 tall). Recesses are now real extruded outlines --
+  `shape: polygon|rect|rhombus|circle` — built by `recess_verts()`.
+- **The peg was on the wrong side.** `[0.14, -0.13]` had the right reach and the
+  wrong sign in x. Derived properly from `board_reference_demo.png`: locate five
+  recesses by colour, least-squares fit board-frame → pixels (2–6px residuals on
+  a 1280px frame), invert the peg through it. Board frame (+165, −117)mm → world
+  `[-0.165, -0.106]`.
+
+Reading toy.png numerically is reliable — the drawing is to scale, and measuring
+it against its own 174mm board reproduced every dimension it also states in text
+(triangle side 52 → 51.5 measured; pentagon side 32 → 51.1×50.0 vs 51.8×49.2
+predicted; square 46 → 46.2; circle 50 → 50.3; diamond side 42 → 41.2 implied
+from its diagonals). Use that method rather than eyeballing.
+
+The board's 180° yaw is **correct** — checked by inverting the robot's position
+through the same fit: it lands at board-frame bearing −109°, against −90°
+expected for 180° and 0/+90/−180° for the alternatives. (The ~19° and the extra
+range are the robot base being elevated above the plane a planar fit assumes;
+the flat objects fit to a few px.)
 
 `data/synthetic/circle_grasp_v1/` (100 episodes, pre-2026-08-15) was
 generated with the pose axes live and is mislabelled — see the

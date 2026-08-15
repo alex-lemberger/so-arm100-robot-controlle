@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from augmentation.randomization import sample_variation  # noqa: E402
-from isaac.scene_setup import board_component_pose  # noqa: E402
+from isaac.scene_setup import board_component_pose, recess_verts  # noqa: E402
 
 CFG = yaml.safe_load((ROOT / "configs" / "simulation.yaml").read_text())
 IDENTITY = np.array([1.0, 0.0, 0.0, 0.0])
@@ -226,6 +226,85 @@ def test_exactly_one_recess_is_empty_and_it_is_the_target():
     return ok
 
 
+def test_recess_shapes_match_the_drawing():
+    """Every stated dimension in docs/reference/toy.png, checked against the geometry
+    actually built. `triangle` and `pentagon` were `shape: cylinder` placeholders
+    until 2026-08-15 -- the two shapes were simply not in the scene."""
+    by_id = {r["id"]: r for r in CFG["board"]["recesses"]}
+    ok = check("no placeholder shapes left",
+               not any(r["shape"] in ("cylinder", "cuboid") for r in by_id.values()),
+               f"{[(r['id'], r['shape']) for r in by_id.values() if r['shape'] in ('cylinder', 'cuboid')]}")
+
+    tri = recess_verts(by_id["triangle"])
+    sides = [np.linalg.norm(tri[i] - tri[(i + 1) % 3]) for i in range(3)]
+    ok &= check("triangle has 3 vertices", len(tri) == 3)
+    ok &= check("triangle side is the drawing's 52mm", all(abs(s - 0.052) < 1e-6 for s in sides),
+                f"sides {np.round(sides, 4)}")
+
+    pent = recess_verts(by_id["pentagon"])
+    psides = [np.linalg.norm(pent[i] - pent[(i + 1) % 5]) for i in range(5)]
+    ok &= check("pentagon has 5 vertices", len(pent) == 5)
+    ok &= check("pentagon side is the drawing's 32mm", all(abs(s - 0.032) < 1e-6 for s in psides),
+                f"sides {np.round(psides, 4)}")
+
+    rh = recess_verts(by_id["diamond"])
+    rsides = [np.linalg.norm(rh[i] - rh[(i + 1) % 4]) for i in range(4)]
+    w = rh[:, 0].max() - rh[:, 0].min()
+    h = rh[:, 1].max() - rh[:, 1].min()
+    ok &= check("rhombus side is the drawing's 42mm", all(abs(s - 0.042) < 5e-4 for s in rsides),
+                f"sides {np.round(rsides, 4)}")
+    # The specific complaint: it was a rotated square, 55x55mm. It must be TALLER.
+    ok &= check("rhombus is taller than it is wide", h > w * 1.3, f"{w * 1000:.1f} wide x {h * 1000:.1f} tall")
+
+    for name, expect in (("rectangle", (0.043, 0.063)), ("square", (0.046, 0.046))):
+        v = recess_verts(by_id[name])
+        got = (v[:, 0].max() - v[:, 0].min(), v[:, 1].max() - v[:, 1].min())
+        ok &= check(f"{name} is {expect[0]*1000:.0f} x {expect[1]*1000:.0f} mm",
+                    all(abs(g - e) < 1e-6 for g, e in zip(got, expect)), f"got {np.round(got, 4)}")
+    return ok
+
+
+def test_every_recess_fits_on_the_slab():
+    """A shape whose real outline runs off the slab is a modelling error the old
+    radius-only checks could not see."""
+    size = CFG["board"]["size"]
+    ok = True
+    for rec in CFG["board"]["recesses"]:
+        v = recess_verts(rec)
+        if v is None:
+            hw = hh = rec["radius"]
+        else:
+            hw = max(abs(v[:, 0].min()), v[:, 0].max())
+            hh = max(abs(v[:, 1].min()), v[:, 1].max())
+        ox, oy = rec["offset"]
+        inside = abs(ox) + hw <= size[0] / 2 and abs(oy) + hh <= size[1] / 2
+        ok &= check(f"{rec['id']:9s} fits within the slab", inside,
+                    f"reaches x {abs(ox) + hw:.4f}, y {abs(oy) + hh:.4f} vs half-extent "
+                    f"{size[0] / 2:.4f}, {size[1] / 2:.4f}")
+    return ok
+
+
+def test_recesses_do_not_overlap_each_other():
+    """Bounding-box separation. Catches a mistyped offset, which is otherwise only
+    visible by rendering and looking."""
+    recs = CFG["board"]["recesses"]
+    boxes = {}
+    for rec in recs:
+        v = recess_verts(rec)
+        hw, hh = (rec["radius"], rec["radius"]) if v is None else (
+            max(abs(v[:, 0].min()), v[:, 0].max()), max(abs(v[:, 1].min()), v[:, 1].max()))
+        ox, oy = rec["offset"]
+        boxes[rec["id"]] = (ox - hw, ox + hw, oy - hh, oy + hh)
+    ok = True
+    ids = list(boxes)
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = boxes[ids[i]], boxes[ids[j]]
+            sep = a[1] <= b[0] or b[1] <= a[0] or a[3] <= b[2] or b[3] <= a[2]
+            ok &= check(f"{ids[i]} and {ids[j]} do not overlap", sep)
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (
@@ -238,6 +317,9 @@ if __name__ == "__main__":
         test_peg_matches_the_circle_recess,
         test_knob_matches_the_drawing,
         test_exactly_one_recess_is_empty_and_it_is_the_target,
+        test_recess_shapes_match_the_drawing,
+        test_every_recess_fits_on_the_slab,
+        test_recesses_do_not_overlap_each_other,
     ):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()
