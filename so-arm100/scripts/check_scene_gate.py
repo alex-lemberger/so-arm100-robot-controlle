@@ -73,22 +73,20 @@ def main() -> int:
 
         sys.path.insert(0, str(REPO_ROOT / "src"))
         from isaac.camera_capture import capture_rgb, create_camera, warm_up
-        from isaac.scene_setup import add_board, add_lighting, add_table_and_object
+        from isaac.scene_setup import build_scene
 
         robot_cfg = yaml.safe_load(Path(args.robot_config).read_text())
         world = World(stage_units_in_meters=1.0, physics_dt=1 / 30, rendering_dt=1 / 30)
         add_reference_to_stage(usd_path=robot_cfg["isaac_robot"]["asset_path"], prim_path="/World/so_arm100")
         world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-        add_table_and_object(world, scene_cfg)
-        add_board(world, scene_cfg)
-
-        # Lit from `lighting:` in the scene config, i.e. the SAME lights
-        # scripts/export_lerobot_dataset.py uses. Until 2026-08-15 this rendered at
-        # dome 1000 / distant 2500 at a different azimuth while the exporter shipped
-        # dome 2000 / distant 20000 -- so the picture a human approved was not lit
-        # like the frames that went into training, which is most of what a scene gate
-        # is for. If the side-by-side now looks wrong, that is the finding.
-        add_lighting(scene_cfg)
+        # THE scene, via the one builder the exporter also uses -- board, peg, table
+        # and lights together. The gate renders its own stage, so anything it builds by
+        # hand is a scene only the gate has ever seen: until 2026-08-15 it lit at dome
+        # 1000 / distant 2500 while the exporter shipped 2000 / 20000, and until
+        # 2026-08-16 it drew a board the exporter never built at all. Going through
+        # build_scene is what stops the approved scene and the exported scene drifting
+        # apart again.
+        build_scene(world, scene_cfg)
 
         world.reset()
 

@@ -824,6 +824,43 @@ def add_board(world, scene_cfg: dict[str, Any]):
     return components
 
 
+class SceneHandles(NamedTuple):
+    """Everything `build_scene` created, for the callers that re-tune it per episode."""
+
+    object: Any                 # the loose peg (dynamic rigid body)
+    material: Any               # its physics material, for friction variation
+    board_components: Any       # [(handle, local_offset, local_quat), ...], or None
+    lights: SceneLights
+
+
+def build_scene(world, scene_cfg: dict[str, Any]) -> SceneHandles:
+    """Assemble THE scene -- table, peg, board, lights -- into `world`.
+
+    Every path that renders or simulates must go through this, and none of them may
+    call `add_table_and_object` / `add_board` / `add_lighting` directly.
+
+    That rule is not stylistic. Until 2026-08-16 scripts/export_lerobot_dataset.py --
+    the script that renders the pixels a policy actually trains on -- built the table,
+    the peg and the lights, and never called `add_board`. So **every synthetic frame
+    ever exported showed the peg with nothing to insert it into**, while
+    generate_synthetic.py simulated the same episodes WITH a board. That is the Dataset
+    C defect (see src/bridge/scene_gate.py) recurring one script over, and the scene
+    gate could not catch it: the gate renders its own scene, correctly, and then
+    approves a config -- so it attests to a scene the exporter never built.
+
+    A gate that renders its own scene can only ever check the config. Making the scene
+    one function is what makes "the approved scene" and "the exported scene" the same
+    object. tests/test_scene_is_built_whole.py fails if a script reaches past it.
+
+    Must be called before `world.reset()`, same as the robot articulation.
+    """
+    obj, material = add_table_and_object(world, scene_cfg)
+    board_components = add_board(world, scene_cfg)
+    lights = add_lighting(scene_cfg)
+    return SceneHandles(object=obj, material=material,
+                        board_components=board_components, lights=lights)
+
+
 def apply_board_variation(board_components, board_cfg: dict[str, Any], variation) -> None:
     """Move the whole board -- slab and every recess together -- to the pose sampled
     for this synthetic episode. No-op when the scene has no board.

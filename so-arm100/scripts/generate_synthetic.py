@@ -111,10 +111,9 @@ def main() -> None:
     from bridge.validation import validate_replay  # noqa: E402
     from isaac.replay_loop import run_replay, settle_to_first_frame  # noqa: E402
     from isaac.scene_setup import (  # noqa: E402
-        add_board,
-        add_table_and_object,
         apply_board_variation,
         apply_variation,
+        build_scene,
         load_scene_config,
     )
 
@@ -132,8 +131,9 @@ def main() -> None:
     world = World(stage_units_in_meters=1.0, physics_dt=1.0 / control_hz, rendering_dt=1.0 / control_hz)
     add_reference_to_stage(usd_path=usd_path, prim_path="/World/so_arm100")
     robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-    scene_object, scene_material = add_table_and_object(world, scene_cfg)
-    board_components = add_board(world, scene_cfg)
+    scene = build_scene(world, scene_cfg)
+    scene_object, scene_material = scene.object, scene.material
+    board_components = scene.board_components
 
     world.reset()
     robot.initialize()

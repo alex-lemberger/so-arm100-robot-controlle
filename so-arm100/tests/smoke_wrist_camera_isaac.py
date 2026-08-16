@@ -42,7 +42,7 @@ try:
         _world_xform,
         warm_up,
     )
-    from isaac.scene_setup import add_board, add_table_and_object, load_scene_config
+    from isaac.scene_setup import build_scene, load_scene_config
 
     OUT.mkdir(exist_ok=True)
     cfg = yaml.safe_load((ROOT / "configs" / "robot_mapping.yaml").read_text())
@@ -51,8 +51,7 @@ try:
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 30, rendering_dt=1 / 30)
     add_reference_to_stage(usd_path=cfg["isaac_robot"]["asset_path"], prim_path="/World/so_arm100")
     robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-    add_table_and_object(world, scene_cfg)
-    add_board(world, scene_cfg)
+    build_scene(world, scene_cfg)
 
     # so100.usd carries no lights of its own -- without these the RTX render is
     # just black, which is indistinguishable from a mis-aimed camera.

@@ -40,9 +40,7 @@ try:
     from isaac.camera_capture import capture_rgb, create_camera, warm_up
     from isaac.scene_setup import (
         LIGHT_CONVERGENCE_STEPS,
-        add_board,
-        add_lighting,
-        add_table_and_object,
+        build_scene,
         apply_lighting_variation,
         load_scene_config,
     )
@@ -54,9 +52,7 @@ try:
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 30, rendering_dt=1 / 30)
     add_reference_to_stage(usd_path=cfg["isaac_robot"]["asset_path"], prim_path="/World/so_arm100")
     world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-    add_table_and_object(world, scene_cfg)
-    add_board(world, scene_cfg)
-    lights = add_lighting(scene_cfg)
+    lights = build_scene(world, scene_cfg).lights
     log(f"base lighting: dome {lights.base_dome_intensity}, distant "
         f"{lights.base_distant_intensity}, rotation {lights.base_distant_rotation_deg}")
 

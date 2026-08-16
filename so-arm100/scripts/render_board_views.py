@@ -58,10 +58,8 @@ from augmentation.randomization import Variation  # noqa: E402
 from isaac.camera_capture import capture_rgb, create_camera, warm_up  # noqa: E402
 from isaac.scene_setup import (  # noqa: E402
     LIGHT_CONVERGENCE_STEPS,
-    add_board,
-    add_lighting,
-    add_table_and_object,
     apply_lighting_variation,
+    build_scene,
     load_scene_config,
 )
 
@@ -70,9 +68,7 @@ out_dir.mkdir(parents=True, exist_ok=True)
 
 scene_cfg = load_scene_config(args.scene_config)
 world = World(stage_units_in_meters=1.0, physics_dt=1 / 30, rendering_dt=1 / 30)
-add_table_and_object(world, scene_cfg)
-add_board(world, scene_cfg)
-lights = add_lighting(scene_cfg)
+lights = build_scene(world, scene_cfg).lights
 world.reset()
 
 if args.light_scale != 1.0:

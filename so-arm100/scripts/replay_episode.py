@@ -86,7 +86,7 @@ def main() -> None:
     sys.path.insert(0, str(repo_src))
     from bridge.trajectory_converter import convert_episode, load_robot_mapping  # noqa: E402
     from bridge.validation import validate_replay, save_validation_result  # noqa: E402
-    from isaac.scene_setup import add_lighting, add_table_and_object, load_scene_config  # noqa: E402
+    from isaac.scene_setup import add_lighting, build_scene, load_scene_config  # noqa: E402
     from isaac.replay_loop import run_replay, settle_to_first_frame  # noqa: E402
     from isaac.camera_capture import capture_rgb, create_camera, warm_up  # noqa: E402
 
@@ -104,10 +104,16 @@ def main() -> None:
 
     scene_object = None
     scene_cfg: dict = {}   # stays empty without --scene-config; add_lighting then uses its defaults
+    scene = None
     if args.scene_config:
-        print(f"Adding table + object from {args.scene_config}")
+        # THE scene, board included. Before 2026-08-16 this built the table and the peg
+        # only, so a replay validated against a workspace with no insertion target in
+        # it -- and the board is a collider, which is exactly the thing a replay ought
+        # to be validated against.
+        print(f"Adding the scene from {args.scene_config}")
         scene_cfg = load_scene_config(args.scene_config)
-        scene_object, _scene_material = add_table_and_object(world, scene_cfg)
+        scene = build_scene(world, scene_cfg)
+        scene_object = scene.object
 
     camera = None
     if args.capture_dir:
@@ -116,7 +122,10 @@ def main() -> None:
         # than a typical "reasonable-sounding" value to produce visible exposure.
         # Values live in the scene config's `lighting:` section (see scene_setup.py);
         # the numbers that used to be inline here are that section's defaults.
-        add_lighting(scene_cfg)
+        # build_scene already defined them when --scene-config was given; without it
+        # there is no scene config at all and add_lighting falls back to its defaults.
+        if scene is None:
+            add_lighting(scene_cfg)
 
         out_dir = Path(args.capture_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

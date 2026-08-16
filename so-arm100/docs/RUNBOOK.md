@@ -104,6 +104,32 @@ everything. The missing knobs (below) were spotted in it, but only because
 someone looked; the automated checks all passed. The pocketless board and the
 teal knob were not visible in it at all — those needed the close-up renders.
 
+## One scene, one builder
+
+`scene_setup.build_scene(world, scene_cfg)` is the only supported way to put the
+scene into a World. Nothing may call `add_table_and_object` / `add_board` /
+`add_lighting` directly, and `tests/test_scene_is_built_whole.py` fails if
+anything does.
+
+This is not tidiness. Until 2026-08-16 `scripts/export_lerobot_dataset.py` — the
+script that renders the pixels a policy actually trains on — called
+`add_table_and_object` and `add_lighting` and **never called `add_board`**. Every
+synthetic frame it ever exported showed the peg with nothing to insert it into,
+while `scripts/generate_synthetic.py` simulated those same episodes *with* a
+board. Nothing failed; the scene gate passed throughout, because the gate renders
+its own scene — it built the board correctly, looked right, and then approved a
+*config*, attesting to a scene the exporter never built.
+
+That is the Dataset C defect (`src/bridge/scene_gate.py`) recurring one script
+over, and no amount of care inside the gate can catch it: a gate cannot see what
+another script assembles. Making the scene one function is what makes "the
+approved scene" and "the exported scene" the same object.
+
+**Known remaining hole:** the gate's fingerprint is taken over
+`configs/simulation.yaml` only. The scene is config *and* code, so an edit to
+`src/isaac/scene_setup.py` changes what gets rendered without invalidating an
+approval. Fingerprinting the builder alongside the config would close it.
+
 ## Synthetic data: label-preserving vs label-breaking
 
 `scripts/generate_synthetic.py` copies the parent episode's actions

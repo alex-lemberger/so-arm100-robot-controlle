@@ -223,10 +223,9 @@ def main() -> None:
         from isaac.replay_loop import settle_to_first_frame  # noqa: E402
         from isaac.scene_setup import (  # noqa: E402
             LIGHT_CONVERGENCE_STEPS,
-            add_lighting,
-            add_table_and_object,
             apply_lighting_variation,
             apply_variation,
+            build_scene,
             load_scene_config,
         )
         from isaacsim.core.utils.types import ArticulationAction
@@ -242,9 +241,14 @@ def main() -> None:
         world = World(stage_units_in_meters=1.0, physics_dt=1.0 / control_hz, rendering_dt=1.0 / control_hz)
         add_reference_to_stage(usd_path=usd_path, prim_path="/World/so_arm100")
         robot = world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-        scene_object, scene_material = add_table_and_object(world, scene_cfg)
-
-        lights = add_lighting(scene_cfg)
+        # build_scene, not add_table_and_object + add_lighting. Until 2026-08-16 this
+        # was exactly those two calls and no add_board, so every frame this script has
+        # ever rendered showed the peg with nothing to insert it into -- while
+        # generate_synthetic.py simulated the same episodes with a board present. The
+        # scene gate passed throughout: it renders its own (correct) scene.
+        scene = build_scene(world, scene_cfg)
+        scene_object, scene_material = scene.object, scene.material
+        lights = scene.lights
         # The settle phase is the only thing between a lighting change and the first
         # captured frame, so it has to be long enough for the renderer to converge on
         # the new exposure. At the default 60 it is, by a wide margin -- this guards

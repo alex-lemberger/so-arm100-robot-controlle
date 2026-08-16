@@ -47,10 +47,8 @@ from isaacsim.core.utils.stage import add_reference_to_stage  # noqa: E402
 sys.path.insert(0, str(ROOT / "src"))
 from augmentation.randomization import Variation  # noqa: E402
 from isaac.scene_setup import (  # noqa: E402
-    add_board,
-    add_lighting,
-    add_table_and_object,
     apply_lighting_variation,
+    build_scene,
     load_scene_config,
 )
 
@@ -60,9 +58,7 @@ scene_cfg = load_scene_config(args.scene_config)
 world = World(stage_units_in_meters=1.0, physics_dt=1 / 60, rendering_dt=1 / 60)
 add_reference_to_stage(usd_path=robot_cfg["isaac_robot"]["asset_path"], prim_path="/World/so_arm100")
 world.scene.add(Robot(prim_path="/World/so_arm100", name="so_arm100"))
-add_table_and_object(world, scene_cfg)
-add_board(world, scene_cfg)
-lights = add_lighting(scene_cfg)
+lights = build_scene(world, scene_cfg).lights
 world.reset()
 
 if args.light_scale != 1.0 or args.light_yaw != 0.0:
