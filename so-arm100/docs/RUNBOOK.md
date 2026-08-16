@@ -293,6 +293,46 @@ locating the peg despite the workspace reading ~15-20% darker than the demos
 (rollout V 151-164 vs demo V 180-188), so illumination is a real distribution
 shift but not what breaks the grasp.
 
+### What is actually in the demos (`./analyse_demos.sh`)
+
+Episode counts say a dataset is big. They say nothing about whether the behaviour
+the policy fails at is in there in any quantity. Measured 2026-08-16 on
+`circle_grasp_v1`, the current best checkpoint's training set (81 eps, 31,541
+frames):
+
+| | share of frames |
+|---|---|
+| gripper **closing** — where "fails at closure" (4/8) lives | **2.7%** |
+| gripper **opening** — where "never releases" lives | **2.5%** |
+| arm essentially **still** (max joint step < 0.25°/frame) | **55.8%** |
+
+The release is a median of **7 frames out of a 504-frame episode, 1.4%**. The 31
+`Pick up the circle piece.` episodes contain **no releases at all** (0.15%
+opening), so they add grasp coverage while diluting the release signal further.
+
+Both failing behaviours together are ~5% of the training signal, and more than
+half of the rest is *hold still*. That is a dataset-**composition** problem and it
+is invisible to every number in `meta/info.json`.
+
+**Trimming is not the lever, and this settles it:** `circle_grasp_v1`'s 50 insert
+episodes *are* `circle_insert_50ep_trimmed` (26,078 frames, median 504, dead
+lead-in 12 / tail 5, all identical). The raw `circle_insert_50ep` is 662 frames
+with an 86-frame dead lead-in and an 85-frame tail. The best checkpoint is
+already trained on trimmed data; trimming has been done.
+
+Two consequences for how to spend effort:
+
+- **Corrective (DAgger) demos must be short takes of the failing moment.** A full
+  fresh episode adds ~13 frames of gripper actuation and ~490 frames of
+  everything else, so it dilutes about as much as it teaches.
+- **Phase-balanced sampling costs no new data at all** — reweighting frames near
+  the gripper transitions is a training-time change against the data already on
+  disk, and is worth trying before collecting anything.
+
+Re-run `./analyse_demos.sh` after collecting corrective demos. The question is not
+how many episodes were added, it is whether the share of the failing behaviour
+moved.
+
 ### The current best checkpoint on this machine
 
 ```
