@@ -93,6 +93,12 @@ the randomization range. It is `sim_docker.sh` plus X11 passthrough (kept
 separate: the GUI flags and the Xauthority mount are needless for the headless
 runs, which is everything else).
 
+**`./render_board.sh`** is the headless counterpart: the board from three
+angles (`top`, `oblique`, `grazing`) written to `board_views/*.png`, no X server
+and no person at the keyboard needed. Use it when you are checking one specific
+piece of geometry, or over ssh. The `grazing` view in particular is what shows
+whether a piece is IN the board or ON it — which no overhead frame can.
+
 The scene gate's side-by-side is one fixed camera and will not show you
 everything. The missing knobs (below) were spotted in it, but only because
 someone looked; the automated checks all passed. The pocketless board and the
