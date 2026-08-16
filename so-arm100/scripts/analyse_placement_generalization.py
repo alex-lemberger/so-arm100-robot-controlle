@@ -10,11 +10,17 @@ So: label every episode with the peg's starting position, and report the outcome
 against it. Placement stops being a nuisance to be nulled out before a run and
 becomes the independent variable.
 
-Outcomes are read off the video, not eye-scored:
-  transport  -- the peg left the table region entirely, i.e. it was picked up and
-                carried. This is the phase that separates r1 from r2.
-  disturbed  -- the peg moved more than DISTURB_MM but was never lifted away.
+Outcomes are read off the video AND the gripper channel, not eye-scored:
+  transport  -- the peg left the table region WHILE THE GRIPPER WAS CLOSED, i.e. it
+                was picked up and carried.
+  pushed-out -- the peg left the region with the gripper open: shoved, not carried.
+  disturbed  -- the peg moved more than DISTURB_MM but stayed in the region.
   untouched  -- the arm never meaningfully moved it.
+
+The gripper condition is not a detail. Without it, "the peg is no longer where it
+was" counts a shove as a carry -- and on 2026-08-16 that reported 2 of 3 probe
+episodes as transports in a run where a human watching said it never grasped once.
+A metric that disagrees with the person watching the robot is wrong by default.
 
     ./analyse_placement.sh rollout_grasp_v1_r1 rollout_grasp_v1_r2
     ./analyse_placement.sh --demos circle_grasp_v1
@@ -58,6 +64,23 @@ def peg_xy(bgr):
     return cents[i] if stats[i, cv2.CC_STAT_AREA] > 600 else None
 
 
+def gripper_closed_mask(root: Path, ep_from: int, ep_to: int, stride: int):
+    """Per sampled frame, whether the jaw is in the closed part of its own range.
+
+    Relative to the episode's own range rather than an absolute angle: the jaw's
+    commanded extremes vary between runs, and what matters is whether the policy was
+    holding something shut, not the number it used to do it.
+    """
+    df = pd.concat([pd.read_parquet(p) for p in sorted((root / "data").rglob("*.parquet"))])
+    df = df.sort_values("index")
+    grip = np.stack(df["observation.state"].to_numpy())[ep_from:ep_to, 5]
+    if grip.size == 0:
+        return np.zeros(0, dtype=bool)
+    lo, hi = float(grip.min()), float(grip.max())
+    threshold = lo + 0.35 * (hi - lo)
+    return grip[::stride] <= threshold
+
+
 def _episode_bounds(root: Path):
     meta = pd.read_parquet(root / "meta" / "episodes").sort_values("episode_index")
     return [(int(r.episode_index), int(r.dataset_from_index), int(r.dataset_to_index))
@@ -84,7 +107,7 @@ def track(root: Path, stride=STRIDE, first_frame_only=False):
     return out
 
 
-def classify(samples):
+def classify(samples, closed=None):
     """(outcome, start_xy, max_move_mm) for one episode's peg track."""
     seen = [p for p in samples if p is not None]
     if not seen:
@@ -92,11 +115,17 @@ def classify(samples):
     start = seen[0]
     move = max(float(np.hypot(*(p - start))) for p in seen) * MM_PER_PX
     run = best = 0
-    for p in samples:
+    best_end = 0
+    for i, p in enumerate(samples):
         run = run + 1 if p is None else 0
-        best = max(best, run)
+        if run > best:
+            best, best_end = run, i
     if best >= GONE_SAMPLES:
-        return "transport", start, move
+        # Carried or shoved? The gripper says which.
+        if closed is None or len(closed) == 0:
+            return "gone-gripper-unknown", start, move
+        window = closed[max(0, best_end - best):best_end + 1]
+        return ("transport" if window.mean() > 0.5 else "pushed-out"), start, move
     return ("disturbed" if move > DISTURB_MM else "untouched"), start, move
 
 
@@ -105,9 +134,11 @@ def report_rollout(name: str):
     if not (root / "meta" / "episodes").exists():
         print(f"{name}: not a rollout dataset")
         return
+    bounds = {e: (a, b) for e, a, b in _episode_bounds(root)}
     rows = []
     for ep, samples in track(root).items():
-        outcome, start, move = classify(samples)
+        a, b = bounds[ep]
+        outcome, start, move = classify(samples, gripper_closed_mask(root, a, b, STRIDE))
         rows.append(dict(ep=ep, outcome=outcome, x=None if start is None else start[0],
                          y=None if start is None else start[1], moved_mm=move))
     d = pd.DataFrame(rows).sort_values("ep")

@@ -249,8 +249,25 @@ def main() -> None:
             print("  correct in both. Grasping never involves the board; the peg is")
             print("  the placement that decides the grasp.")
 
-    cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
-    print(f"overlay written to {args.out}")
+    # A 50/50 blend shows that things differ; it does not show where to put them.
+    # Directions in words ("19mm right and 22mm up, in image coordinates") turned out
+    # to be unusable at the bench on 2026-08-16 -- the peg came back measuring
+    # identical to a tenth of a pixel. So the overlay is annotated: where the peg is,
+    # where the demos put it, and an arrow between the two. Match the picture.
+    overlay = cv2.addWeighted(ref, 0.5, live, 0.5, 0)
+    here = (int(round(PEG_REF_XY[0] + pdx)), int(round(PEG_REF_XY[1] + pdy)))
+    want = (int(round(PEG_REF_XY[0] + DEMO_PEG["dx"])), int(round(PEG_REF_XY[1] + DEMO_PEG["dy"])))
+    cv2.circle(overlay, here, PEG_RADIUS, (0, 0, 255), 2)
+    cv2.putText(overlay, "peg is here", (here[0] - 40, here[1] + PEG_RADIUS + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.circle(overlay, want, PEG_RADIUS, (0, 220, 0), 2)
+    cv2.putText(overlay, "put it here", (want[0] - 40, want[1] - PEG_RADIUS - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 2, cv2.LINE_AA)
+    if np.hypot(*(np.array(want) - np.array(here))) > PEG_RADIUS / 2:
+        cv2.arrowedLine(overlay, here, want, (0, 220, 0), 2, tipLength=0.25)
+    cv2.imwrite(args.out, overlay)
+    print(f"\noverlay written to {args.out} -- RED is where the peg is, GREEN is where")
+    print("the demos put it. Match the picture; the arrow is the move.")
 
 
 if __name__ == "__main__":
