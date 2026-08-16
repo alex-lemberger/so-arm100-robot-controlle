@@ -1,7 +1,12 @@
 {
   "config": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/configs/simulation.yaml",
   "config_sha256": "0fc37cf7c53cd7acc3b3ecc236a36f0e3ddfd1afec8caa6957762e05ecd80ca1",
-  "approved_at": "2026-08-16T16:48:41.187610+00:00",
+  "scene_sha256": "2f98512c7054dff151354d5ebda46b8f21f66ac64c6410f982390d1b3e727d4b",
+  "scene_sources": [
+    "src/isaac/scene_setup.py",
+    "src/isaac/camera_capture.py"
+  ],
+  "approved_at": "2026-08-16T17:13:06.490705+00:00",
   "approved_by": "alex",
   "reference_frame": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/docs/reference/board_reference_demo.png",
   "comparison_image": "/media/alex/F6E48479E4843DBD/projects/so-arm100-robot-controlle/so-arm100/scene_gate_comparison.png",

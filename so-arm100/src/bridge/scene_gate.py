@@ -38,10 +38,54 @@ from pathlib import Path
 
 DEFAULT_GATE_PATH = Path("data/evaluation/scene_gate.json")
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The scene is the config AND the code that turns it into prims. Fingerprinting the
+# config alone is how an approval survived the change that mattered: on 2026-08-16 the
+# board was rebuilt -- six recesses cut as real pockets, the pieces reshaped and
+# reseated, the knobs' material rebound -- entirely in scene_setup.py, and an approval
+# taken against an unchanged simulation.yaml would have stayed valid across all of it.
+#
+# camera_capture.py is in here too: the approved artefact is a PICTURE, and the code
+# that projects the scene into it decides what that picture shows.
+#
+# Whole-file hashes, so a comment-only edit also invalidates an approval. That is the
+# safe direction of a distinction nothing can reliably make: there is no way to know
+# which edit to a scene builder changes pixels without rendering it and looking, which
+# is the very thing the approval is supposed to attest to.
+SCENE_SOURCE_FILES = (
+    "src/isaac/scene_setup.py",
+    "src/isaac/camera_capture.py",
+)
+
 
 def config_fingerprint(config_path: str | Path) -> str:
-    """SHA-256 of the scene config's bytes. Any edit invalidates the approval."""
+    """SHA-256 of the scene config's bytes alone.
+
+    Kept for diagnostics -- `gate_status` uses it to say whether an invalidated
+    approval was invalidated by the config or by the builder. `scene_fingerprint` is
+    what actually gates.
+    """
     return hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
+
+
+def scene_fingerprint(config_path: str | Path, source_files=None) -> str:
+    """SHA-256 over the scene config AND every file in `SCENE_SOURCE_FILES`.
+
+    Paths are taken relative to the repo root unless absolute. A missing source file
+    raises rather than being skipped: silently fingerprinting less than intended is
+    the failure this function exists to prevent.
+    """
+    h = hashlib.sha256()
+    h.update(b"config\0")
+    h.update(Path(config_path).read_bytes())
+    for rel in (SCENE_SOURCE_FILES if source_files is None else source_files):
+        path = Path(rel)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        h.update(f"\0{Path(rel).as_posix()}\0".encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
 
 
 @dataclass
@@ -107,12 +151,19 @@ def check_geometry(scene_cfg: dict) -> list[GeometryFinding]:
 
 
 def write_gate(config_path: str | Path, gate_path: str | Path, findings: list[dict],
-               reference_frame: str, comparison_image: str, approved_by: str) -> dict:
+               reference_frame: str, comparison_image: str, approved_by: str,
+               source_files=None) -> dict:
     from datetime import datetime, timezone
 
+    sources = list(SCENE_SOURCE_FILES if source_files is None else source_files)
     record = {
         "config": str(config_path),
         "config_sha256": config_fingerprint(config_path),
+        # What actually gates. `scene_sources` is recorded so the file says which code
+        # the approval covered, rather than leaving it to whatever the constant says
+        # by the time someone reads the record back.
+        "scene_sha256": scene_fingerprint(config_path, sources),
+        "scene_sources": [str(s) for s in sources],
         "approved_at": datetime.now(timezone.utc).isoformat(),
         "approved_by": approved_by,
         "reference_frame": reference_frame,
@@ -125,7 +176,8 @@ def write_gate(config_path: str | Path, gate_path: str | Path, findings: list[di
     return record
 
 
-def gate_status(config_path: str | Path, gate_path: str | Path = DEFAULT_GATE_PATH) -> tuple[bool, str]:
+def gate_status(config_path: str | Path, gate_path: str | Path = DEFAULT_GATE_PATH,
+                source_files=None) -> tuple[bool, str]:
     """(ok, reason). Never raises -- callers decide how loudly to fail."""
     gate_path = Path(gate_path)
     if not gate_path.exists():
@@ -135,11 +187,25 @@ def gate_status(config_path: str | Path, gate_path: str | Path = DEFAULT_GATE_PA
     except json.JSONDecodeError as exc:
         return False, f"scene gate at {gate_path} is unreadable ({exc})"
 
-    current = config_fingerprint(config_path)
-    if record.get("config_sha256") != current:
+    sources = record.get("scene_sources") or (
+        SCENE_SOURCE_FILES if source_files is None else source_files)
+    recorded = record.get("scene_sha256")
+    if recorded is None:
         return False, (
-            f"{config_path} has changed since the scene was approved "
-            f"({record.get('config_sha256', '?')[:12]} -> {current[:12]}). "
+            "this approval predates 2026-08-16, when the fingerprint started covering "
+            "the scene BUILDER as well as the config. It attests to a config, and the "
+            "board was rebuilt in code since. Re-approve."
+        )
+    if recorded != scene_fingerprint(config_path, sources):
+        # Say which half moved: "the config is untouched" is the confusing case, and
+        # the one the config-only fingerprint used to wave through.
+        cfg_moved = record.get("config_sha256") != config_fingerprint(config_path)
+        what = (f"{config_path} has changed" if cfg_moved
+                else f"{config_path} is untouched, but the scene builder changed "
+                     f"({', '.join(str(s) for s in sources)})")
+        return False, (
+            f"{what} since the scene was approved "
+            f"({recorded[:12]} -> {scene_fingerprint(config_path, sources)[:12]}). "
             "The approval covers the scene that was looked at, not this one."
         )
     failed = [f["name"] for f in record.get("findings", []) if not f.get("ok")]
@@ -152,14 +218,14 @@ def gate_status(config_path: str | Path, gate_path: str | Path = DEFAULT_GATE_PA
 
 
 def require_gate(config_path: str | Path, gate_path: str | Path = DEFAULT_GATE_PATH,
-                 override: bool = False) -> str:
+                 override: bool = False, source_files=None) -> str:
     """Raise SystemExit unless the scene has been approved for this exact config.
 
     `override` exists because a hard block with no escape gets worked around in
     ways that leave no trace. Taking it is recorded in the generated data's
     provenance, so a dataset built from an unchecked scene says so about itself.
     """
-    ok, reason = gate_status(config_path, gate_path)
+    ok, reason = gate_status(config_path, gate_path, source_files)
     if ok:
         return reason
     if override:

@@ -46,7 +46,7 @@ def main() -> int:
     args = ap.parse_args()
 
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    from bridge.scene_gate import check_geometry, config_fingerprint, write_gate  # noqa: E402
+    from bridge.scene_gate import check_geometry, scene_fingerprint, write_gate  # noqa: E402
 
     import yaml  # noqa: E402
     scene_cfg = yaml.safe_load(Path(args.scene_config).read_text())
@@ -125,13 +125,13 @@ def main() -> int:
         # Everything that matters has to happen BEFORE simulation_app.close():
         # closing the app ends the process, so anything after it never runs. That
         # silently truncated this very report the first time.
-        result = _report_and_approve(args, findings, render_ok, write_gate, config_fingerprint)
+        result = _report_and_approve(args, findings, render_ok, write_gate, scene_fingerprint)
     finally:
         simulation_app.close()
     return result
 
 
-def _report_and_approve(args, findings, render_ok, write_gate, config_fingerprint) -> int:
+def _report_and_approve(args, findings, render_ok, write_gate, scene_fingerprint) -> int:
     say("\nAll checks:")
     for f in findings:
         say(f"  {'PASS' if f.ok else 'FAIL'}  {f.name:26s} {f.detail}")
@@ -148,7 +148,7 @@ def _report_and_approve(args, findings, render_ok, write_gate, config_fingerprin
                    [{"name": f.name, "ok": f.ok, "detail": f.detail} for f in findings],
                    args.reference, args.out, args.approve)
         say(f"\nScene APPROVED by {args.approve} for config "
-            f"{config_fingerprint(args.scene_config)[:12]}; gate written to {args.gate}")
+            f"{scene_fingerprint(args.scene_config)[:12]}; gate written to {args.gate}")
         return 0
 
     if failed:

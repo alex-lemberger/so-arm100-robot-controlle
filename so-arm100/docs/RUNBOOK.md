@@ -125,10 +125,18 @@ over, and no amount of care inside the gate can catch it: a gate cannot see what
 another script assembles. Making the scene one function is what makes "the
 approved scene" and "the exported scene" the same object.
 
-**Known remaining hole:** the gate's fingerprint is taken over
-`configs/simulation.yaml` only. The scene is config *and* code, so an edit to
-`src/isaac/scene_setup.py` changes what gets rendered without invalidating an
-approval. Fingerprinting the builder alongside the config would close it.
+The gate's fingerprint covers `configs/simulation.yaml` **and** the code that
+turns it into a scene — `SCENE_SOURCE_FILES` in `src/bridge/scene_gate.py`, which
+is `src/isaac/scene_setup.py` and `src/isaac/camera_capture.py`. Whole-file
+hashes, so a comment-only edit invalidates an approval too: there is no way to
+know which edit to a scene builder changes pixels without rendering it and
+looking, which is the thing the approval attests to.
+
+It was config-only until 2026-08-16, and that gap was not theoretical — the board
+was rebuilt (pockets cut, pieces reshaped and reseated, knob materials rebound)
+entirely in `scene_setup.py`, and an approval taken beforehand would have been
+carried straight across it. Approvals written before that day have no
+`scene_sha256` and are refused by name.
 
 ## Synthetic data: label-preserving vs label-breaking
 

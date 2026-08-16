@@ -16,10 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from bridge.scene_gate import (  # noqa: E402
+    SCENE_SOURCE_FILES,
     check_geometry,
     config_fingerprint,
     gate_status,
     require_gate,
+    scene_fingerprint,
     write_gate,
 )
 
@@ -110,11 +112,86 @@ def test_gate_requires_approval_and_tracks_the_config():
     return ok
 
 
+def test_editing_the_builder_invalidates_approval():
+    """The hole this closes: the board was rebuilt on 2026-08-16 -- pockets cut, pieces
+    reshaped and reseated, knob materials rebound -- entirely in scene_setup.py, with
+    simulation.yaml's geometry untouched in the parts that mattered. A config-only
+    fingerprint would have carried the old approval straight across it."""
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        cfg_path = td / "simulation.yaml"
+        cfg_path.write_text(yaml.safe_dump(CFG))
+        builder = td / "scene_setup.py"
+        builder.write_text("def build_scene(world, cfg):\n    pass\n")
+        gate_path = td / "scene_gate.json"
+        sources = [builder]
+
+        write_gate(cfg_path, gate_path, [{"name": "x", "ok": True, "detail": ""}],
+                   "ref.png", "cmp.png", "tester", source_files=sources)
+        good, why = gate_status(cfg_path, gate_path)
+        ok &= check("approved scene passes", good, why)
+
+        # The config is untouched; only the code that builds the scene moved.
+        before = cfg_path.read_bytes()
+        builder.write_text("def build_scene(world, cfg):\n    return 'a different board'\n")
+        good, why = gate_status(cfg_path, gate_path)
+        ok &= check("editing the builder invalidates approval", not good, why)
+        ok &= check("and the reason says the config was untouched", "untouched" in why, why)
+        ok &= check("the config really did not change", cfg_path.read_bytes() == before)
+
+        # Even a comment-only edit: we cannot tell which edits change pixels.
+        write_gate(cfg_path, gate_path, [{"name": "x", "ok": True, "detail": ""}],
+                   "ref.png", "cmp.png", "tester", source_files=sources)
+        builder.write_text(builder.read_text() + "# a comment\n")
+        good, _ = gate_status(cfg_path, gate_path)
+        ok &= check("a comment-only builder edit also invalidates", not good)
+    return ok
+
+
+def test_pre_2026_08_16_approvals_are_stale():
+    """A record with no scene_sha256 attests to a config only. It must not pass."""
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        cfg_path = td / "simulation.yaml"
+        cfg_path.write_text(yaml.safe_dump(CFG))
+        gate_path = td / "scene_gate.json"
+        gate_path.write_text(json.dumps({
+            "config": str(cfg_path),
+            "config_sha256": config_fingerprint(cfg_path),   # config matches exactly
+            "approved_by": "someone", "approved_at": "2026-08-15T00:00:00+00:00",
+            "findings": [{"name": "x", "ok": True, "detail": ""}],
+        }))
+        good, why = gate_status(cfg_path, gate_path)
+        ok &= check("an old config-only approval is refused", not good, why)
+        ok &= check("and it says why", "predates" in why, why)
+    return ok
+
+
+def test_the_real_builder_is_fingerprinted():
+    """The declared sources must exist, and the fingerprint must actually depend on
+    them -- a typo'd path that silently hashed nothing would be the same hole again."""
+    ok = True
+    for rel in SCENE_SOURCE_FILES:
+        ok &= check(f"{rel} exists", (ROOT / rel).exists())
+    base = scene_fingerprint(ROOT / "configs" / "simulation.yaml")
+    with tempfile.TemporaryDirectory() as td:
+        alt = Path(td) / "scene_setup.py"
+        alt.write_text("# not the real builder\n")
+        other = scene_fingerprint(ROOT / "configs" / "simulation.yaml", [alt])
+    ok &= check("the fingerprint depends on the builder's contents", base != other)
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (test_current_scene_passes_geometry,
                test_catches_the_dataset_c_defects,
-               test_gate_requires_approval_and_tracks_the_config):
+               test_gate_requires_approval_and_tracks_the_config,
+               test_editing_the_builder_invalidates_approval,
+               test_pre_2026_08_16_approvals_are_stale,
+               test_the_real_builder_is_fingerprinted):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()
     failed = [k for k, v in results.items() if not v]
