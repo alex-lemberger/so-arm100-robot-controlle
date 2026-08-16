@@ -364,6 +364,13 @@ carried), **disturbed** (moved >15mm, never lifted), **untouched**.
 |---|---|---|
 | `rollout_grasp_v1_r1` | y≈574 (the demos' dense region) | **4/10** |
 | `rollout_grasp_v1_r2` | y≈611 (~22mm lower) | **0/10** |
+| `rollout_grasp_v1_r3` | y≈612 (same) | **0/10** |
+
+r3 repeated r2 with nothing changed: **0/20 transports** at the displaced
+position against 4/10 at the demos'. Note also r3's episodes 5-9, where the peg's
+start position stops varying at all (332.5±0.3, 615.6±0.5) — the arm had stopped
+moving it, so nobody was resetting it between episodes. An eval that stops
+perturbing its own setup is worth noticing in the log.
 
 The board was correctly aligned in both (4.4px, 3.5px). ~22mm of peg displacement
 took transport from 4/10 to 0/10 — the policy nudged the peg in 6 episodes and
