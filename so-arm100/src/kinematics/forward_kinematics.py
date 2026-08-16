@@ -79,6 +79,17 @@ def forward_kinematics(joint_positions_rad: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray shape [3]: (x, y, z) position in metres, base-link frame.
     """
+    return forward_kinematics_pose(joint_positions_rad)[:3, 3]
+
+
+def forward_kinematics_pose(joint_positions_rad: np.ndarray) -> np.ndarray:
+    """The full 4x4 end-effector transform, same chain and same argument as
+    `forward_kinematics` (which is this function's translation column).
+
+    Added 2026-08-16 for the IK's use: position alone cannot say whether a warped
+    trajectory quietly rolled the gripper over on its way to the new object position,
+    and that is a thing worth being able to measure.
+    """
     joint_positions_rad = np.asarray(joint_positions_rad, dtype=np.float64)
     if joint_positions_rad.shape != (len(_CHAIN),):
         raise ValueError(f"expected {len(_CHAIN)} joint angles, got shape {joint_positions_rad.shape}")
@@ -86,5 +97,4 @@ def forward_kinematics(joint_positions_rad: np.ndarray) -> np.ndarray:
     t_total = np.eye(4)
     for (_, local_pos0, local_rot0, axis), theta in zip(_CHAIN, joint_positions_rad):
         t_total = t_total @ _link_transform(local_pos0, local_rot0, axis, theta)
-
-    return t_total[:3, 3]
+    return t_total

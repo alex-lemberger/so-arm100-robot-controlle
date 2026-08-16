@@ -138,6 +138,59 @@ entirely in `scene_setup.py`, and an approval taken beforehand would have been
 carried straight across it. Approvals written before that day have no
 `scene_sha256` and are refused by name.
 
+## Re-planning a demo onto a moved object (IK + trajectory warping)
+
+`src/kinematics/inverse_kinematics.py` and `src/augmentation/trajectory_warp.py`,
+added 2026-08-16. Together they are what makes
+`randomization.label_breaking.object_position` honest: displace the peg and
+re-plan the joint trajectory so the actions reach where it now is, instead of
+copying actions that reach where it used to be.
+
+No library was needed. The arm is five revolute joints, `forward_kinematics`
+already composes the chain, and damped least squares over a finite-difference
+Jacobian is about a hundred lines.
+
+**Task priority, not a weighted blend.** Position is the primary task and is
+solved exactly; the gripper's approach direction is pushed through the nullspace
+of position. Weighting the two against each other was tried first and is the wrong
+shape for a 5-DOF arm — at an orientation weight of 0.12 the gripper held to 1–5°
+but position error hit 3mm at a 5mm displacement and 33mm at 50mm, because five
+joints cannot serve six objectives and least squares just picks a compromise.
+
+**Do not expect joint-space proximity as well.** Position (3) plus approach
+direction (2) consumes all five joints, so "the nearest configuration to the
+demonstrator's" is not additionally available — solutions drift up to ~1.1 rad in
+joint space while holding the tip and the approach. That is fine: what a warped
+episode is judged on is the end-effector path, not the elbow.
+
+**Measured envelope** (27 reach postures of `circle_grasp_v1` ep0, 8 directions):
+
+| displacement | worst IK error | unconverged | gripper rotation (med / p90 / worst) |
+|---|---|---|---|
+| 10 mm | 0.48 mm | 0 | 2.0 / 4.9 / 6.2° |
+| 20 mm | 0.50 mm | 0 | 3.3 / 9.8 / 12.6° |
+| 30 mm | 0.48 mm | 0 | 6.0 / 15.1 / 19.0° |
+| 40 mm | 1.81 mm | 4 | 6.8 / 19.7 / 25.2° |
+| 50 mm | 5.23 mm | 9 | 9.6 / 24.9 / 32.6° |
+
+`MAX_SAFE_DISPLACEMENT_M = 0.03`, and a larger request **raises** rather than
+returning a quietly bad episode. Approach tilt runs about 0.2°/mm — half what
+position-only IK gave.
+
+**Warping fills in a neighbourhood; it does not move a demo across the table.**
+Covering a 15cm workspace still needs real demonstrations spread across it. The
+combination is the point: a grid of real placements every ~5cm, each warped ±3cm,
+gives continuous coverage instead of a set of points.
+
+Only the reach is displaced. The weight is 1.0 through the grasp, ramps to 0 by
+the release, and is 0 after — because the peg moved and the board did not.
+Displacing the whole episode uniformly would fix the grasp label and break the
+insert label.
+
+**Not yet wired into `scripts/generate_synthetic.py`.** That integration is what
+finally unlocks the gated pose axes; until it lands, the axes stay inert and
+`--allow-label-breaking` still produces mislabelled episodes.
+
 ## Synthetic data: label-preserving vs label-breaking
 
 `scripts/generate_synthetic.py` copies the parent episode's actions
