@@ -293,6 +293,30 @@ locating the peg despite the workspace reading ~15-20% darker than the demos
 (rollout V 151-164 vs demo V 180-188), so illumination is a real distribution
 shift but not what breaks the grasp.
 
+### Pre-flight before any eval (`./verify_ports.sh`, `./check_alignment.sh`)
+
+`check_alignment.sh` reports three things, and all three have bitten:
+
+- **Board pose**, by phase correlation on gradient. Aim < 5px. Colour thresholding
+  was tried first and drifted 15px between two captures of a stationary board.
+- **Peg pose**, by gradient template match against the demos' own frame. Aim
+  < 12px. This used colour thresholding until 2026-08-16 and failed the same way
+  the board check already had: under a warm cast the peg's hue leaves the 70-100
+  window and it reports `MISSING` with no other symptom. Grasping never involves
+  the board, so the peg is the placement that bears on the grasp failures.
+- **Lighting**, as the bare paper's saturation and red-channel clipping.
+
+**Give the camera time before believing any colour reading.** The overview
+camera's auto-white-balance settles far slower than its exposure. Measured
+2026-08-16 from a cold open: the paper read saturation 63 with 94% of its red
+channel clipped, then 42, 29, 21 across successive captures, against the demos'
+22. The first reading looks exactly like "the room's lighting is wrong" and is
+not — it is the camera. `align_board.py` now reads 60 frames rather than 10.
+Placement numbers were stable throughout; only the colour judgements moved.
+
+This does **not** affect recording or eval: those go through lerobot's own camera
+handling (`--robot.cameras`), the same path that captured the demos.
+
 ### What is actually in the demos (`./analyse_demos.sh`)
 
 Episode counts say a dataset is big. They say nothing about whether the behaviour

@@ -22,26 +22,74 @@ REFERENCE = REPO_ROOT / "docs" / "reference" / "board_reference_demo.png"
 MM_PER_PX = 107.0 / 172.4  # see the note in main()
 
 
-def peg_centroid(bgr):
-    """The loose peg on the paper: saturated green-cyan, left of the board region.
+# Where the demos put the loose peg, in the reference frame. The demos cluster it
+# tightly (x 371-396, y 556-583); this is that cluster's centre.
+PEG_REF_XY = (371, 574)
+PEG_RADIUS = 46
 
-    Grasping does not involve the board at all, so board alignment says nothing
-    about whether the peg is where the demos had it. Measured 2026-08-14: the
-    demos cluster the peg tightly (x 371-396, y 556-583) and it was being placed
-    ~22mm outside that, while grasp success sat at 2/7 and 4/9.
+
+def _gradient(bgr):
+    """Normalised gradient magnitude -- an illumination-invariant view of a frame."""
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+    return mag / (mag.max() + 1e-6)
+
+
+def peg_offset(ref_bgr, live_bgr):
+    """Where the loose peg is now, relative to where the demos had it.
+
+    Matched on gradient, not colour. Colour thresholding is what this function used
+    until 2026-08-16 and it fails exactly the way `board_shift`'s docstring already
+    describes for the board: under warm evening light the peg's hue slides out of the
+    70-100 window and the detector returns MISSING with no other symptom. Measured
+    that evening: the paper's own median saturation went 22 -> 63 and 94% of its red
+    channel was clipped at 255, so there was no absolute colour threshold left to
+    thresh on. board_shift was moved to phase correlation for this reason; the peg
+    check was left behind on the approach that had already been shown not to work.
+
+    Grasping does not involve the board at all, so this is the check that bears on
+    the grasp failures -- the one it is least affordable to have silently unavailable.
+
+    Returns (dx, dy, score); score is normalised cross-correlation, ~0.8 on a good
+    match. Below ~0.5, treat the position as unknown rather than believing it.
     """
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    h, s_, v = hsv[:, :, 0].astype(int), hsv[:, :, 1].astype(int), hsv[:, :, 2].astype(int)
-    mask = ((h > 70) & (h < 100) & (s_ > 60) & (v > 50)).astype(np.uint8)
-    mask[:, 430:] = 0    # exclude the board's own recesses
-    mask[:380, :] = 0    # exclude the arm
-    n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask)
-    if n < 2:
-        return None
-    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    if stats[i, cv2.CC_STAT_AREA] < 200:
-        return None
-    return cent[i]
+    cx, cy = PEG_REF_XY
+    r = PEG_RADIUS
+    template = _gradient(ref_bgr)[cy - r:cy + r, cx - r:cx + r]
+    # Search the paper left of the board, below the arm -- the peg's whole plausible
+    # range, and nowhere the board's own recesses could match instead.
+    x0, x1, y0, y1 = 150, 470, 380, 720
+    result = cv2.matchTemplate(_gradient(live_bgr)[y0:y1, x0:x1], template,
+                               cv2.TM_CCOEFF_NORMED)
+    _minv, score, _minl, loc = cv2.minMaxLoc(result)
+    return loc[0] + x0 + r - cx, loc[1] + y0 + r - cy, score
+
+
+# A patch of bare paper, clear of the board, the arm and the clutter on the right.
+# The workspace's own white reference.
+PAPER_PATCH = (slice(560, 700), slice(600, 900))
+
+
+def illumination(bgr):
+    """(median saturation, %% of the red channel clipped) on the bare paper.
+
+    The paper is white, so on a neutral-lit frame its saturation is near zero and
+    nothing clips. Both numbers moving means the room's colour temperature has moved,
+    which is a distribution shift the policy never saw -- and, past a point, destroyed
+    information rather than shifted information.
+
+    Added 2026-08-16, when a session was nearly evaluated under warm evening light:
+    the paper's median saturation had gone 22 -> 63 and 94%% of its red channel was
+    clipped at 255. That is not the ~15%% brightness difference already on record; it
+    is a different white point with a blown channel, and it would have made the run
+    incomparable to the baseline it was meant to extend.
+    """
+    patch = bgr[PAPER_PATCH]
+    sat = float(np.median(cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)[:, :, 1]))
+    clipped = float((patch[:, :, 2] >= 254).mean() * 100)
+    return sat, clipped
 
 
 def board_shift(ref_bgr: np.ndarray, live_bgr: np.ndarray) -> tuple[float, float, float]:
@@ -84,8 +132,17 @@ def main() -> None:
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    # Auto-exposure AND auto-white-balance both have to settle, and from a cold open
+    # the white balance is far slower than the exposure. MEASURED 2026-08-16: the
+    # first capture after plugging through read the bare paper at saturation 63 with
+    # 94% of its red channel clipped -- a warm cast strong enough that the peg's hue
+    # left the detector's window entirely -- and successive captures walked 63 -> 42
+    # -> 29 -> 21 against the demos' 22. Ten frames read "the room's lighting is
+    # wrong"; sixty read "it matches". The placement numbers were stable throughout,
+    # so this only ever corrupted the colour judgements -- which is worse, because
+    # they are the ones that look like a finding about the room.
     live = None
-    for _ in range(10):  # let auto-exposure settle
+    for _ in range(60):
         ok, frame = cap.read()
         if ok:
             live = frame
@@ -121,23 +178,33 @@ def main() -> None:
         print("  where you stand: image-right is the towel/cable side of the paper,")
         print("  image-down is toward the paper's near edge.")
 
-    ref_peg, live_peg = peg_centroid(ref), peg_centroid(live)
-    if ref_peg is None or live_peg is None:
-        print("\nPEG: could not locate it in one of the frames "
-              f"(reference={'ok' if ref_peg is not None else 'MISSING'}, "
-              f"live={'ok' if live_peg is not None else 'MISSING'})")
+    ref_sat, ref_clip = illumination(ref)
+    live_sat, live_clip = illumination(live)
+    print(f"\nLIGHT  bare paper: saturation {live_sat:.0f} (demos {ref_sat:.0f}), "
+          f"red channel clipped {live_clip:.0f}% (demos {ref_clip:.0f}%)")
+    if live_clip > 20 or live_sat > ref_sat + 20:
+        print("  LIGHTING IS OFF -- the room is a different colour temperature from the")
+        print("  demos', and a clipped channel is information destroyed, not shifted.")
+        print("  An eval run under this light is not comparable to one under theirs.")
+        print("  Fix the light before running, not the numbers afterwards.")
     else:
-        pdx, pdy = live_peg[0] - ref_peg[0], live_peg[1] - ref_peg[1]
-        pdist = (pdx**2 + pdy**2) ** 0.5
-        print(f"\nPEG  dx={pdx:+.1f}px dy={pdy:+.1f}px  |d|={pdist:.1f}px (~{pdist*MM_PER_PX:.0f} mm)")
-        if pdist < 12:
-            print("  peg is where the demos put it.")
-        else:
-            print(f"  MOVE THE PEG {abs(pdx)*MM_PER_PX:.0f}mm "
-                  f"{'left' if pdx > 0 else 'right'} and {abs(pdy)*MM_PER_PX:.0f}mm "
-                  f"{'up' if pdy > 0 else 'down'} (image directions, as above).")
-            print("  Grasping does not involve the board, so this is the one that")
-            print("  matters for the grasp failures.")
+        print("  close enough to the demos' lighting.")
+
+    pdx, pdy, pscore = peg_offset(ref, live)
+    pdist = (pdx**2 + pdy**2) ** 0.5
+    print(f"\nPEG  dx={pdx:+.1f}px dy={pdy:+.1f}px  |d|={pdist:.1f}px "
+          f"(~{pdist*MM_PER_PX:.0f} mm)  match={pscore:.3f}")
+    if pscore < 0.5:
+        print("  WEAK MATCH -- the peg was not found. Do not trust the offset above;")
+        print("  check the overlay and that the peg is on the paper at all.")
+    elif pdist < 12:
+        print("  peg is where the demos put it.")
+    else:
+        print(f"  MOVE THE PEG {abs(pdx)*MM_PER_PX:.0f}mm "
+              f"{'left' if pdx > 0 else 'right'} and {abs(pdy)*MM_PER_PX:.0f}mm "
+              f"{'up' if pdy > 0 else 'down'} (image directions, as above).")
+        print("  Grasping does not involve the board, so this is the one that")
+        print("  matters for the grasp failures.")
 
     cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
     print(f"overlay written to {args.out}")
