@@ -163,9 +163,23 @@ def _attach_knob(parent_prim_path: str, radius: float, height: float, color: lis
     re-planned (Rule 4), so giving the knob a collider would change the replay's
     contact dynamics -- a real decision about how the sim behaves, separate from
     making it look right, and not one to smuggle in with a rendering fix.
+
+    The colour is bound as a material, not left to displayColor. displayColor is
+    enough on the board's pieces, which are raw meshes, but the loose peg is an
+    Isaac `DynamicCylinder` and Isaac binds a material to it for its `color:` --
+    and a material binding is INHERITED by children, where displayColor is not. So
+    the peg's knob rendered in the peg's own teal (2026-08-16: found by rendering
+    the peg close up and looking at it -- top-down it vanished into the piece
+    entirely). On the real board every knob is bare birch, and the contrast is the
+    point: the knob is what the gripper closes on.
+
+    Binding a material on the knob is not enough on its own, either: Isaac binds
+    the peg's with `strongerThanDescendants`, which beats anything a child binds.
+    So the parent's binding is weakened here first. That only lets descendants
+    override it -- the peg keeps its own colour.
     """
     import omni.usd
-    from pxr import Gf, UsdGeom
+    from pxr import Gf, UsdGeom, UsdShade
 
     stage = omni.usd.get_context().get_stage()
     knob = UsdGeom.Cylinder.Define(stage, f"{parent_prim_path}/knob")
@@ -175,7 +189,32 @@ def _attach_knob(parent_prim_path: str, radius: float, height: float, color: lis
     knob.CreateExtentAttr([(-radius, -radius, -height / 2), (radius, radius, height / 2)])
     knob.CreateDisplayColorAttr([Gf.Vec3f(*color)])
     UsdGeom.Xformable(knob).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, z_offset))
+
+    parent_rel = UsdShade.MaterialBindingAPI(stage.GetPrimAtPath(parent_prim_path)).GetDirectBindingRel()
+    if parent_rel and parent_rel.GetTargets():
+        UsdShade.MaterialBindingAPI.SetMaterialBindingStrength(
+            parent_rel, UsdShade.Tokens.weakerThanDescendants)
+    _bind_color_material(stage, knob.GetPrim(), f"{parent_prim_path}/knob/material", color)
     return knob
+
+
+def _bind_color_material(stage, prim, material_path: str, color):
+    """Bind a flat UsdPreviewSurface of `color` to `prim`, overriding anything an
+    ancestor binds. See `_attach_knob` for why a bound material rather than
+    displayColor."""
+    from pxr import Gf, Sdf, UsdShade
+
+    material = UsdShade.Material.Define(stage, material_path)
+    shader = UsdShade.Shader.Define(stage, f"{material_path}/shader")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.7)   # matte, like wood
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    binding = UsdShade.MaterialBindingAPI.Apply(prim)
+    binding.Bind(material)
+    return material
 
 
 def add_table_and_object(world, scene_cfg: dict[str, Any]):

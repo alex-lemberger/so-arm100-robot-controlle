@@ -177,7 +177,7 @@ found by looking at the gate's side-by-side:
   a 1280px frame), invert the peg through it. Board frame (+165, −117)mm → world
   `[-0.165, -0.106]`.
 
-Two things, found on 2026-08-16 by rendering the board close up and looking:
+Three more, found on 2026-08-16 by rendering the board close up and looking:
 
 - **Every recess is a pocket.** Only the empty circle was cut; the five seated
   pieces were 2mm plates lying on an unbroken slab, so they read as stickers and
@@ -193,6 +193,13 @@ Two things, found on 2026-08-16 by rendering the board close up and looking:
   inner line is the piece. Measured on the three that read cleanly: circle
   49.9 → 45.8, square 46.2 → 42.1, rectangle 43.3 → 39.4. So `board.piece_clearance`
   is 0.002 and every `size`/`side`/`radius` in the config is the recess.
+- **A material binding is inherited by children; displayColor is not.** The peg's
+  knob rendered in the peg's own teal, and top-down it was invisible. Isaac binds
+  the peg's `color:` material with `strongerThanDescendants`, which beats anything
+  a child binds — so `_attach_knob` weakens the parent's binding *and* binds the
+  knob's own. This only bites on Isaac core objects (`DynamicCylinder` and
+  friends); the board's raw meshes carry displayColor and are fine.
+
 Reading toy.png numerically is reliable — the drawing is to scale, and measuring
 it against its own 174mm board reproduced every dimension it also states in text
 (triangle side 52 → 51.5 measured; pentagon side 32 → 51.1×50.0 vs 51.8×49.2
