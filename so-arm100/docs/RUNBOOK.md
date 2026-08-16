@@ -293,6 +293,43 @@ locating the peg despite the workspace reading ~15-20% darker than the demos
 (rollout V 151-164 vs demo V 180-188), so illumination is a real distribution
 shift but not what breaks the grasp.
 
+### The metric is success vs OBJECT POSITION (`./analyse_placement.sh`)
+
+A single success rate cannot tell a policy that *sees the peg and adapts* from one
+that replays a trajectory ending where the peg usually is. Those produce the same
+number and are opposite outcomes, and the second is what this project exists not
+to build. So placement is not a nuisance to null out before a run — it is the
+independent variable. Record it per episode and report success against it.
+
+`./analyse_placement.sh <rollout>` reads outcomes off the video rather than
+eye-scoring: **transport** (the peg left the table region — it was picked up and
+carried), **disturbed** (moved >15mm, never lifted), **untouched**.
+
+**Measured 2026-08-16, and this is the project's core result so far:**
+
+| run | peg start | transports |
+|---|---|---|
+| `rollout_grasp_v1_r1` | y≈574 (the demos' dense region) | **4/10** |
+| `rollout_grasp_v1_r2` | y≈611 (~22mm lower) | **0/10** |
+
+The board was correctly aligned in both (4.4px, 3.5px). ~22mm of peg displacement
+took transport from 4/10 to 0/10 — the policy nudged the peg in 6 episodes and
+lifted it in none.
+
+**Why: the demos cover about 2cm.** `./analyse_placement.sh --demos circle_grasp_v1`
+clusters the peg's start position over the 45 episodes where it is visible at frame
+0 into three dense groups — 17, 13 and 11 episodes — whose centres are
+(405,561), (401,591) and (381,570). That is a **~15 x 19mm patch**, plus 3 stray
+episodes at x≈331 and a single outlier at y≈644. The nominal spread of 66 x 62mm is
+almost entirely those four strays.
+
+So the policy is competent in a 2cm neighbourhood and nowhere else, and the
+training data never asked for more. This is a data-coverage result, not an
+architecture one. Note also that the peg distribution is **not Gaussian** — quoting
+it as a mean ± sd (as `align_board.py`'s constants do) hides the cluster structure
+and makes a placement 20mm outside every dense cluster look like a reasonable
+"2 sd".
+
 ### Pre-flight before any eval (`./verify_ports.sh`, `./check_alignment.sh`)
 
 `check_alignment.sh` reports three things, and all three have bitten:

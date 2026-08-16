@@ -229,12 +229,25 @@ def main() -> None:
         print(f"  vs the demos' own placements: {zx:.1f} sd in x, {zy:.1f} sd in y "
               f"(they scattered it: dx {DEMO_PEG['dx']:+.0f}+/-{DEMO_PEG['sd_x']:.0f}px, "
               f"dy {DEMO_PEG['dy']:+.0f}+/-{DEMO_PEG['sd_y']:.0f}px)")
-        if max(zx, zy) < 2.0:
-            print("  peg is inside the spread the demos used. Leave it alone.")
+        # Aim at the demos' MEAN, not merely inside their spread. Being inside a wide
+        # distribution is not the same as being where the policy is any good, and the
+        # two eval runs say so directly: r1 placed the peg at 0.0 sd and transported in
+        # 4 of 10 episodes; r2 placed it at 2.2 sd -- still "inside the spread" on the
+        # old 2 sd test, which duly said "leave it alone" -- and transported in 0 of 10,
+        # never lifting the peg off the table once. One setup change, 4/10 -> 0/10.
+        if max(zx, zy) < 1.0:
+            print("  peg is on the demos' central placement -- where r1 (transport 4/10)")
+            print("  had it. Good to run.")
         else:
-            print("  peg is OUTSIDE the demos' spread -- move it toward the middle of")
-            print("  their range. Grasping never involves the board, so the peg is the")
-            print("  placement that bears on the grasp failures.")
+            tx = DEMO_PEG["dx"] - pdx
+            ty = DEMO_PEG["dy"] - pdy
+            print(f"  MOVE THE PEG {abs(tx)*MM_PER_PX:.0f}mm {'right' if tx > 0 else 'left'} "
+                  f"and {abs(ty)*MM_PER_PX:.0f}mm {'down' if ty > 0 else 'up'} "
+                  "(image directions) onto the demos' central placement.")
+            print("  This is NOT a formality. r2 ran with the peg 2.2 sd low and")
+            print("  transported 0/10 against r1's 4/10 at 0.0 sd, with the board")
+            print("  correct in both. Grasping never involves the board; the peg is")
+            print("  the placement that decides the grasp.")
 
     cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
     print(f"overlay written to {args.out}")
