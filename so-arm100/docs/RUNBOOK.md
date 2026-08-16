@@ -299,11 +299,27 @@ shift but not what breaks the grasp.
 
 - **Board pose**, by phase correlation on gradient. Aim < 5px. Colour thresholding
   was tried first and drifted 15px between two captures of a stationary board.
-- **Peg pose**, by gradient template match against the demos' own frame. Aim
-  < 12px. This used colour thresholding until 2026-08-16 and failed the same way
-  the board check already had: under a warm cast the peg's hue leaves the 70-100
-  window and it reports `MISSING` with no other symptom. Grasping never involves
-  the board, so the peg is the placement that bears on the grasp failures.
+- **Peg pose**, by gradient template match, judged against **the spread the demos
+  themselves used** — not against a threshold. This used colour thresholding until
+  2026-08-16 and failed the same way the board check already had: under a warm
+  cast the peg's hue leaves the 70-100 window and it reports `MISSING` with no
+  other symptom.
+
+**The board and the peg are not the same kind of quantity**, and treating them
+alike is why this check sent people after the wrong thing. Measured across all 81
+episode starts of `circle_grasp_v1` (`scripts/measure_setup_distribution.py`):
+
+| | demos' own spread, vs the reference frame |
+|---|---|
+| board | dx +1.0 ± 1.4, dy +0.2 ± 0.3, **max 4.1px (2.5mm)** — held still all session |
+| peg | dx +21.1 ± 24.0, dy +1.2 ± 16.6, **median 34px (21mm)** — scattered |
+
+So the board is worth aligning to a couple of millimetres, and the peg only needs
+to land somewhere in the demos' range. The old fixed thresholds (<5px board, <12px
+peg) were guesses, and the peg one was three times tighter than the demos' own
+median — on 2026-08-16 it reported a correctly-placed peg as needing a 23mm
+correction, on a setup whose position was pencil-marked and demonstrably unmoved.
+Re-derive the constants with that script if the demo set changes.
 - **Lighting**, as the bare paper's saturation and red-channel clipping.
 
 **Give the camera time before believing any colour reading.** The overview

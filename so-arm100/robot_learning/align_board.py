@@ -22,10 +22,32 @@ REFERENCE = REPO_ROOT / "docs" / "reference" / "board_reference_demo.png"
 MM_PER_PX = 107.0 / 172.4  # see the note in main()
 
 
-# Where the demos put the loose peg, in the reference frame. The demos cluster it
-# tightly (x 371-396, y 556-583); this is that cluster's centre.
+# Where the demos put the loose peg, in the reference frame.
 PEG_REF_XY = (371, 574)
 PEG_RADIUS = 46
+
+# What the DEMOS actually did, measured at the first frame of all 81 episodes of
+# circle_grasp_v1 by scripts/measure_setup_distribution.py (2026-08-16). Offsets are
+# from this file's reference frame, in pixels.
+#
+# These replace a pair of fixed thresholds (<5px board, <12px peg) that were guesses,
+# and the peg one was wrong by a factor of three in the WRONG DIRECTION -- it demanded
+# the peg be placed more precisely than the demos ever placed it, and duly reported a
+# correct setup as needing a 23mm correction.
+#
+# The board and the peg are not the same kind of quantity, and that is the finding:
+#
+#   board:  dx +1.0 +/- 1.4, dy +0.2 +/- 0.3, max |d| 4.1px (2.5mm) over 46 episodes
+#           -- held still to within a couple of millimetres, all session.
+#   peg:    dx +21.1 +/- 24.0, dy +1.2 +/- 16.6, median |d| 34px (21mm) over 36
+#           -- scattered. The policy saw the peg all over the paper and cannot be
+#           expecting it in one spot.
+#
+# So the board is worth aligning precisely and the peg is worth only a sanity check.
+# (Sample sizes are below 81 because frames where the arm occludes the peg, or the
+# board's correlation is weak, are dropped rather than guessed at.)
+DEMO_BOARD = {"dx": 1.0, "dy": 0.2, "max_dist": 4.1}
+DEMO_PEG = {"dx": 21.1, "dy": 1.2, "sd_x": 24.0, "sd_y": 16.6}
 
 
 def _gradient(bgr):
@@ -168,8 +190,10 @@ def main() -> None:
     if response < 0.10:
         print("WARNING: weak correlation -- is the arm parked over the board,")
         print("or the board out of the 420-830 x 150-540 crop? Check the overlay.")
-    if dist < 5:
-        print("ALIGNED -- good enough to run the eval.")
+    # Against the demos' own spread, not a round number: they held the board to
+    # 4.1px worst-case, so anything inside that is inside the training distribution.
+    if dist < DEMO_BOARD["max_dist"]:
+        print("ALIGNED -- inside the spread the demos themselves had.")
     else:
         print(f"MOVE THE BOARD {abs(dx):.0f}px {'left' if dx > 0 else 'right'} "
               f"and {abs(dy):.0f}px {'up' if dy > 0 else 'down'} "
@@ -197,14 +221,20 @@ def main() -> None:
     if pscore < 0.5:
         print("  WEAK MATCH -- the peg was not found. Do not trust the offset above;")
         print("  check the overlay and that the peg is on the paper at all.")
-    elif pdist < 12:
-        print("  peg is where the demos put it.")
     else:
-        print(f"  MOVE THE PEG {abs(pdx)*MM_PER_PX:.0f}mm "
-              f"{'left' if pdx > 0 else 'right'} and {abs(pdy)*MM_PER_PX:.0f}mm "
-              f"{'up' if pdy > 0 else 'down'} (image directions, as above).")
-        print("  Grasping does not involve the board, so this is the one that")
-        print("  matters for the grasp failures.")
+        # How unusual is this placement FOR THE DEMOS -- not how far it is from one
+        # frame. The demos scattered the peg, so distance-from-reference says nothing.
+        zx = abs(pdx - DEMO_PEG["dx"]) / DEMO_PEG["sd_x"]
+        zy = abs(pdy - DEMO_PEG["dy"]) / DEMO_PEG["sd_y"]
+        print(f"  vs the demos' own placements: {zx:.1f} sd in x, {zy:.1f} sd in y "
+              f"(they scattered it: dx {DEMO_PEG['dx']:+.0f}+/-{DEMO_PEG['sd_x']:.0f}px, "
+              f"dy {DEMO_PEG['dy']:+.0f}+/-{DEMO_PEG['sd_y']:.0f}px)")
+        if max(zx, zy) < 2.0:
+            print("  peg is inside the spread the demos used. Leave it alone.")
+        else:
+            print("  peg is OUTSIDE the demos' spread -- move it toward the middle of")
+            print("  their range. Grasping never involves the board, so the peg is the")
+            print("  placement that bears on the grasp failures.")
 
     cv2.imwrite(args.out, cv2.addWeighted(ref, 0.5, live, 0.5, 0))
     print(f"overlay written to {args.out}")
