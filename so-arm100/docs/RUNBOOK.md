@@ -95,7 +95,8 @@ runs, which is everything else).
 
 The scene gate's side-by-side is one fixed camera and will not show you
 everything. The missing knobs (below) were spotted in it, but only because
-someone looked; the automated checks all passed.
+someone looked; the automated checks all passed. The pocketless board and the
+teal knob were not visible in it at all — those needed the close-up renders.
 
 ## Synthetic data: label-preserving vs label-breaking
 
@@ -156,10 +157,12 @@ found by looking at the gate's side-by-side:
   disc. The sim had no knobs at all and offered a bare 40mm cylinder, i.e. the
   wrong object at exactly the moment the policy decides how wide to close.
 - **The peg is the circle piece.** In `board_reference_demo.png` five pieces are
-  seated and the circle recess is empty, its piece on the table. So the peg's
-  radius must equal the circle recess's (both 50mm). They were independently
-  0.02 and 0.025 — the sim showed a peg that could not have come out of the hole
-  it gets inserted into. `tests/test_board_randomization.py` guards this now.
+  seated and the circle recess is empty, its piece on the table. So the peg has
+  to be the piece that fits that recess. It was 0.02 against a 0.025 recess — a
+  peg that could not have come out of the hole it gets inserted into — then 0.025
+  exactly, which is the *recess*, not the piece (see clearance, below). It is now
+  0.023. `tests/test_board_randomization.py` guards the relationship, not the
+  number.
 - **`filled:` per recess.** A seated piece carries a knob; an empty recess is a
   bare painted floor, drawn darker. The sim drew all six identically, so the hole
   the policy has to find looked exactly like the five it must ignore.
@@ -174,6 +177,22 @@ found by looking at the gate's side-by-side:
   a 1280px frame), invert the peg through it. Board frame (+165, −117)mm → world
   `[-0.165, -0.106]`.
 
+Two things, found on 2026-08-16 by rendering the board close up and looking:
+
+- **Every recess is a pocket.** Only the empty circle was cut; the five seated
+  pieces were 2mm plates lying on an unbroken slab, so they read as stickers and
+  the empty recess stood out for the wrong reason — it was the only shape on the
+  board with any depth, rather than the only one without a piece in it. The slab
+  mesh now cuts all six (`_slab_with_pockets_mesh`), and the pieces are the
+  board's own 12mm thickness sitting on the pocket floors, standing 4mm proud.
+  `recess_depth: 0.008` is the one number here that is **not** measured — the
+  drawing's "8mm" is a horizontal gap from the circle to the board's right edge,
+  not a depth, and toy.png does not dimension the depth at all.
+- **A piece is 2mm smaller than its recess, per side.** toy.png draws every shape
+  as a double outline and dimensions the OUTER one ("recess side 46mm"); the
+  inner line is the piece. Measured on the three that read cleanly: circle
+  49.9 → 45.8, square 46.2 → 42.1, rectangle 43.3 → 39.4. So `board.piece_clearance`
+  is 0.002 and every `size`/`side`/`radius` in the config is the recess.
 Reading toy.png numerically is reliable — the drawing is to scale, and measuring
 it against its own 174mm board reproduced every dimension it also states in text
 (triangle side 52 → 51.5 measured; pentagon side 32 → 51.1×50.0 vs 51.8×49.2

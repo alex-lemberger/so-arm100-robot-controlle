@@ -17,7 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from augmentation.randomization import sample_variation  # noqa: E402
-from isaac.scene_setup import board_component_pose, recess_verts  # noqa: E402
+from isaac.scene_setup import (  # noqa: E402
+    board_component_pose,
+    piece_verts,
+    pocket_cells,
+    recess_outline,
+    recess_verts,
+)
 
 CFG = yaml.safe_load((ROOT / "configs" / "simulation.yaml").read_text())
 IDENTITY = np.array([1.0, 0.0, 0.0, 0.0])
@@ -188,14 +194,24 @@ def test_peg_matches_the_circle_recess():
     showed a peg that could not have come out of the hole it is inserted into.
     """
     obj = CFG["object"]
-    circle = next(r for r in CFG["board"]["recesses"] if r["id"] == "circle")
-    ok = check("peg radius == circle recess radius", obj["radius"] == circle["radius"],
-               f"{obj['radius']} vs {circle['radius']}")
-    ok &= check("both are the drawing's 50mm diameter", obj["radius"] == 0.025,
-                f"radius {obj['radius']}")
-    # Pieces are the board's own thickness -- they sit flush in the recess.
-    ok &= check("peg is the board's thickness", abs(obj["height"] - CFG["board"]["size"][2]) < 1e-9,
-                f"peg h {obj['height']} vs board {CFG['board']['size'][2]}")
+    board = CFG["board"]
+    circle = next(r for r in board["recesses"] if r["id"] == "circle")
+    clearance = board["piece_clearance"]
+    ok = check("peg radius == circle recess radius - clearance",
+               abs(obj["radius"] - (circle["radius"] - clearance)) < 1e-9,
+               f"{obj['radius']} vs {circle['radius']} - {clearance}")
+    ok &= check("the recess is the drawing's 50mm diameter", circle["radius"] == 0.025,
+                f"radius {circle['radius']}")
+    # And the peg is the 46mm PIECE drawn inside it, not the recess itself. It was
+    # 50mm until 2026-08-16: a peg that exactly filled the hole it comes out of.
+    ok &= check("the peg is the drawing's 46mm piece", abs(obj["radius"] * 2 - 0.046) < 1e-9,
+                f"diameter {obj['radius'] * 2}")
+    # Pieces are the board's own thickness -- deeper than the recess, so they stand proud.
+    ok &= check("peg is the board's thickness", abs(obj["height"] - board["size"][2]) < 1e-9,
+                f"peg h {obj['height']} vs board {board['size'][2]}")
+    ok &= check("peg thickness == the seated pieces' thickness",
+                abs(obj["height"] - board["piece_thickness"]) < 1e-9,
+                f"{obj['height']} vs {board['piece_thickness']}")
     # And it has to rest ON the table, not sunk into it or hovering.
     table_top = CFG["table"]["position"][2] + CFG["table"]["size"][2] / 2
     ok &= check("peg rests on the table top", abs(obj["position"][2] - (table_top + obj["height"] / 2)) < 1e-9,
@@ -305,6 +321,98 @@ def test_recesses_do_not_overlap_each_other():
     return ok
 
 
+def test_pieces_are_inset_from_their_recesses():
+    """A piece is not the size of its recess.
+
+    toy.png draws every shape as a double outline and dimensions the OUTER one
+    ("recess side 46mm"); the inner line is the piece, 2.0mm inside it on every shape
+    the drawing can be read cleanly on. The sim had them identical until 2026-08-16 --
+    which is a piece that cannot be lifted out of its own hole, and, once the recess
+    became a real pocket, z-fighting stripes down the pocket wall.
+
+    The inset is checked edge by edge, not by bounding box: scaling a rhombus about
+    its centre insets its long flanks less than its short ones, and a bbox check
+    cannot see the difference.
+    """
+    clearance = CFG["board"]["piece_clearance"]
+    ok = check("clearance is the drawing's 2mm", abs(clearance - 0.002) < 1e-9, f"{clearance}")
+    for rec in CFG["board"]["recesses"]:
+        outer = recess_verts(rec)
+        inner = piece_verts(rec, clearance)
+        if outer is None:                      # the circle: analytic, not a polygon
+            ok &= check("circle piece is the recess less the clearance", inner is None)
+            continue
+        gaps = []
+        for i in range(len(outer)):
+            e = outer[(i + 1) % len(outer)] - outer[i]
+            n = np.array([-e[1], e[0]]) / np.linalg.norm(e)     # inward, CCW winding
+            gaps.append(min(float(np.dot(n, v - outer[i])) for v in inner))
+        ok &= check(f"{rec['id']:9s} piece sits {clearance*1000:.0f}mm inside every recess edge",
+                    all(abs(g - clearance) < 1e-9 for g in gaps),
+                    f"edge gaps mm {np.round(np.array(gaps) * 1000, 3)}")
+    return ok
+
+
+def test_seated_pieces_stand_proud_of_the_board():
+    """A seated piece rests on its pocket floor, so its thickness minus the recess
+    depth is how far it stands above the birch -- 4mm on these numbers, which is what
+    board_reference_demo.png shows. Until 2026-08-16 the pieces were 2mm plates lying
+    ON an unbroken slab, so this quantity did not exist."""
+    board = CFG["board"]
+    depth, thickness, slab = board["recess_depth"], board["piece_thickness"], board["size"][2]
+    proud = thickness - depth
+    ok = check("the pocket is shallower than the piece is thick", proud > 0,
+               f"depth {depth}, piece {thickness}")
+    ok &= check("seated pieces stand 4mm proud", abs(proud - 0.004) < 1e-9, f"{proud * 1000:.1f}mm")
+    ok &= check("the pocket does not cut through the slab", depth < slab,
+                f"depth {depth} vs slab {slab}")
+    # Where add_board puts the piece: centred on (slab_top - depth + thickness/2).
+    local_z = slab / 2.0 - depth + thickness / 2.0
+    ok &= check("piece bottom rests exactly on the pocket floor",
+                abs((local_z - thickness / 2.0) - (slab / 2.0 - depth)) < 1e-12)
+    ok &= check("piece top stands above the board's top face", local_z + thickness / 2.0 > slab / 2.0)
+    return ok
+
+
+def test_every_recess_gets_its_own_pocket_cell():
+    """The slab's top face is cut into one rectangular cell per pocket, and each cell
+    is tiled as a ring around its own hole (src/isaac/scene_setup.py). If two pockets
+    landed in one cell the mesh would be built wrong, so the partition is checked here
+    rather than discovered in a render.
+
+    Note this board has NO global grid: the diamond hangs below y=0 and the square
+    reaches above it, so the cut has to be columns-first, rows within each column.
+    """
+    board = CFG["board"]
+    recesses = board["recesses"]
+    size = board["size"]
+    boxes = []
+    for rec in recesses:
+        v = recess_outline(rec) + np.array(rec["offset"], dtype=np.float64)
+        boxes.append((v[:, 0].min(), v[:, 0].max(), v[:, 1].min(), v[:, 1].max()))
+
+    cells = pocket_cells(size, boxes, names=[r["id"] for r in recesses])
+    ok = check("one cell per recess", len(cells) == len(recesses) and all(c is not None for c in cells))
+
+    for rec, cell, box in zip(recesses, cells, boxes):
+        x0, x1, y0, y1 = cell
+        ok &= check(f"{rec['id']:9s} pocket lies strictly inside its cell",
+                    x0 < box[0] and box[1] < x1 and y0 < box[2] and box[3] < y1,
+                    f"pocket {np.round(box, 4)} vs cell {np.round(cell, 4)}")
+
+    # Cells must tile the slab: disjoint interiors, and their areas summing to the face.
+    for i in range(len(cells)):
+        for j in range(i + 1, len(cells)):
+            a, b = cells[i], cells[j]
+            disjoint = a[1] <= b[0] or b[1] <= a[0] or a[3] <= b[2] or b[3] <= a[2]
+            ok &= check(f"cells for {recesses[i]['id']} and {recesses[j]['id']} do not overlap",
+                        disjoint, f"{np.round(a, 4)} vs {np.round(b, 4)}")
+    area = sum((c[1] - c[0]) * (c[3] - c[2]) for c in cells)
+    ok &= check("cells cover the whole top face", abs(area - size[0] * size[1]) < 1e-12,
+                f"{area:.6f} vs {size[0] * size[1]:.6f}")
+    return ok
+
+
 if __name__ == "__main__":
     results = {}
     for fn in (
@@ -320,6 +428,9 @@ if __name__ == "__main__":
         test_recess_shapes_match_the_drawing,
         test_every_recess_fits_on_the_slab,
         test_recesses_do_not_overlap_each_other,
+        test_pieces_are_inset_from_their_recesses,
+        test_seated_pieces_stand_proud_of_the_board,
+        test_every_recess_gets_its_own_pocket_cell,
     ):
         print(f"\n{fn.__name__}:")
         results[fn.__name__] = fn()

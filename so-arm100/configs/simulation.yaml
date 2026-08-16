@@ -41,10 +41,19 @@ object:
   id: circle_peg
   shape: cylinder
   # MEASURED from docs/reference/toy.png (was eyeballed at r=0.02, h=0.03 -- the
-  # config said outright to replace it once a measurement existed). The circle
-  # recess is 50mm exact, and the pieces are the board's own 12mm thickness.
-  radius: 0.025  # 50mm diameter, exact
-  height: 0.012
+  # config said outright to replace it once a measurement existed).
+  #
+  # The peg is the circle PIECE, and a piece is not the size of its recess. The
+  # drawing dimensions the recess at 50mm and draws the piece inside it, measured
+  # 45.8mm -- 2mm of clearance per side, the same gap it draws on every shape. This
+  # was 0.025 (the recess's own radius) until 2026-08-16, i.e. a peg that exactly
+  # filled the hole it is supposed to be lifted out of and dropped back into. That
+  # was invisible while the recess was a painted disc lying on the slab; with the
+  # recess cut as a real pocket it is z-fighting stripes down the pocket wall.
+  # Kept as (circle recess radius - board.piece_clearance); the test enforces that
+  # relationship rather than the bare number.
+  radius: 0.023  # 46mm across: the 50mm recess less 2mm clearance per side
+  height: 0.012  # the board's own thickness, from the drawing's side view
   # DERIVED from docs/reference/board_reference_demo.png on 2026-08-15, replacing a
   # value that was explicitly provisional and, it turns out, on the WRONG SIDE.
   #
@@ -85,15 +94,22 @@ object:
 # bottom. Cross-checked against pixel measurement of the same drawing, agreeing
 # to ~1-2mm on every shape.
 #
-# Only the CIRCLE is dimensionally exact (recess diameter 50mm) -- it is the task
-# target and the one that has to be right. The other five are visual placeholders
-# at measured centres with area-equivalent extents, because Isaac's core object
-# API has no triangle or pentagon primitive. They exist so the rendered board
-# carries the right pattern and moves rigidly; they are not insertion targets.
+# All six recesses now carry the drawing's own stated dimensions. (Five of them were
+# "visual placeholders with area-equivalent extents" until 2026-08-15, on the grounds
+# that Isaac's core object API has no triangle or pentagon primitive -- true of the
+# core API, but the shapes are built as UsdGeom meshes instead, so the excuse was
+# never binding.)
 #
-# Recesses are visual-only: motion is replayed rather than re-planned (Rule 4), so
-# nothing is ever physically inserted, and a collider there would only risk
-# spurious contact with the replayed peg.
+# Every recess is cut into the slab as a real blind pocket, and the five seated pieces
+# are separate prims sitting IN those pockets (2026-08-16). Before that only the empty
+# circle was a hole and the seated pieces were 2mm plates lying on an unbroken slab --
+# so the pieces read as stickers, and the empty recess stood out for the wrong reason:
+# it was the only shape on the board with any depth, rather than the only one without
+# a piece in it.
+#
+# The slab, holes included, is a collider. The PIECES are visual-only: motion is
+# replayed rather than re-planned (Rule 4), so nothing is ever physically inserted,
+# and a collider there would only risk spurious contact with the replayed peg.
 #
 # `rotation` is derived from docs/reference/robot-base.png, a top-down view with the
 # robot at the bottom and the board at the top. In that view the board carries the
@@ -130,11 +146,31 @@ board:
   # (normalised on read in board_component_pose, so a rounded 0.7071 would not
   # silently rescale the board -- but keep it exact here anyway)
   color: [0.85, 0.72, 0.50]            # light birch ply
-  # Depth of a recess below the board's top face. The drawing's 8mm edge dimension;
-  # the pieces are the board's full 12mm and sit on a backing, which is why an empty
-  # recess shows a painted floor rather than the table through a hole. Only recesses
-  # with `filled: false` are actually cut -- a seated piece covers its own.
+  # Depth of a recess below the board's top face. Every recess is cut this deep,
+  # filled or not.
+  #
+  # NOT a measured number, and the note that used to claim it was "the drawing's 8mm
+  # edge dimension" was wrong: that 8mm is a HORIZONTAL gap from the circle recess to
+  # the board's right edge (circle centre 53.2mm + 25mm radius = 78.2mm, against the
+  # board's 87mm half-width -- 8.8mm, which is the dimension it labels). toy.png does
+  # not dimension the recess depth at all. 8mm out of the board's 12mm is an estimate
+  # consistent with docs/reference/board_reference_demo.png, where the pieces stand
+  # visibly proud of the birch and the empty circle is a shallow pocket rather than a
+  # through-hole -- re-measure on the real board before trusting it.
+  #
+  # It leaves 4mm of slab under each pocket floor (the "backing" the pieces sit on,
+  # which is why an empty recess shows painted wood and not the table), and it leaves
+  # each seated piece standing 12 - 8 = 4mm proud.
   recess_depth: 0.008
+  # A piece is the board's full thickness -- toy.png's side view draws it 12mm thick
+  # with a 13mm knob on top.
+  piece_thickness: 0.012
+  # Gap between a recess and the piece that seats in it, per side. MEASURED off
+  # toy.png, which draws every shape as a double outline and dimensions the OUTER one:
+  # circle 49.9 -> 45.8mm, square 46.2 -> 42.1mm, rectangle 43.3 -> 39.4mm. All three
+  # give 2.0mm. Every `size`/`side`/`radius` below is therefore the RECESS; the piece
+  # is that outline inset by this much (src/isaac/scene_setup.py: piece_verts).
+  piece_clearance: 0.002
   recesses:
     # offset is (x, y) in the BOARD's own frame (the DRAWING's orientation: +x
     # right, +y up), measured from the slab centre.
