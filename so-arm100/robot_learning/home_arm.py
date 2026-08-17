@@ -152,8 +152,14 @@ def report_wrist(robot) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check-only", action="store_true", help="report framing, do not move")
-    ap.add_argument("--port", default="/dev/ttyACM1")
-    ap.add_argument("--id", default="white")
+    # Default read from loop.py CONFIG rather than written out again. This said
+    # /dev/ttyACM1 as a literal until 2026-08-17, when the ttyACM assignment flipped
+    # and that became the LEADER -- so the default would have driven the wrong arm.
+    from loop import CONFIG
+
+    ap.add_argument("--port", default=CONFIG["follower"]["port"],
+                    help="follower serial port (default: loop.py CONFIG)")
+    ap.add_argument("--id", default=CONFIG["follower"]["id"])
     for joint in ("shoulder-pan", "shoulder-lift", "elbow-flex", "wrist-flex", "wrist-roll", "gripper"):
         ap.add_argument(f"--{joint}", type=float, help=f"override {joint.replace('-', '_')}")
     args = ap.parse_args()

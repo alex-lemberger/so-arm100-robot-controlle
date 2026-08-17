@@ -52,8 +52,23 @@ CONFIG = {
     # disappeared, /dev/ttyACM0 remained -- so ttyACM0 is the leader, ttyACM1
     # is the follower. This mapping is NOT stable across reboots/replugs;
     # re-verify with the same unplug test if ports are ever in doubt.
-    "follower": {"type": "so100_follower", "port": "/dev/ttyACM1", "id": "white"},
-    "leader": {"type": "so100_leader", "port": "/dev/ttyACM0", "id": "black_20260801"},
+    #
+    # SWAPPED BACK 2026-08-17 after the arms were replugged: follower "white"
+    # (adapter serial 5AE6058270) came up as ttyACM0 and leader "black_20260801"
+    # (5B14032956) as ttyACM1 -- the reverse of the 08-12 assignment above. That is
+    # the third flip in six days, so treat these two lines as scratch values and
+    # ALWAYS run ./verify_ports.sh before anything touches the robot.
+    #
+    # The durable fix, not taken yet: address the arms through /dev/serial/by-id,
+    # which is keyed by each adapter's USB serial and therefore immune to
+    # enumeration order --
+    #   /dev/serial/by-id/usb-1a86_USB_Single_Serial_5AE6058270-if00  follower white
+    #   /dev/serial/by-id/usb-1a86_USB_Single_Serial_5B14032956-if00  leader black
+    # It needs hw_docker.sh to mount /dev/serial as well, because those symlinks live
+    # on the host and the container is only given the two ttyACM nodes. Worth doing;
+    # deliberately not bundled into a debugging session.
+    "follower": {"type": "so100_follower", "port": "/dev/ttyACM0", "id": "white"},
+    "leader": {"type": "so100_leader", "port": "/dev/ttyACM1", "id": "black_20260801"},
     # Verified 2026-08-11 via lerobot-find-cameras + visual match (Mac indices
     # were overview=1, wrist=0 -- also not portable).
     # fourcc=MJPG: uncompressed YUYV at 1280x720 can't sustain 30fps over USB
