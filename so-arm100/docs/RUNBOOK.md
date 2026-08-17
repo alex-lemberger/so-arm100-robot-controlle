@@ -33,17 +33,82 @@ machine; everything runs through Docker.
 
 ## Hardware
 
-- Follower arm: id `white`, port `/dev/ttyACM1`.
-- Leader arm: id `black_20260801`, port `/dev/ttyACM0`.
-- **Ports are NOT stable across reboots/replugs.** Run `./verify_ports.sh`
-  every session before trusting the mapping above or the `CONFIG` dict in
-  `robot_learning/loop.py` — don't assume a past session's mapping still
-  holds just because nothing was consciously unplugged.
+- Follower arm: id `white`, USB adapter serial **5AE6058270**.
+- Leader arm: id `black_20260801`, USB adapter serial **5B14032956**.
+- **Identify the arms by adapter serial, never by `/dev/ttyACM*` number.** The
+  numbering follows plug order and flipped three times in six days (08-11,
+  08-12, 08-17). Any node number written in this file is a snapshot, not a fact.
+  `./preflight.sh` (or `./verify_ports.sh`) resolves the mapping by serial and
+  checks it against `CONFIG` in `robot_learning/loop.py`. As of 2026-08-17 the
+  follower is `ttyACM0` and the leader `ttyACM1` — the reverse of 08-12.
+- Only `loop.py CONFIG` names ports; `teleop_check.sh` and `home_arm.py` read
+  them from it. Never re-type a port into a wrapper script — two of them held a
+  stale mapping after the 08-17 flip, and running one would have driven the
+  leader through the follower's config (the 2026-08-12 Overload error).
 - Cameras: overview=`/dev/video0`, wrist=`/dev/video2`. Both need
   `"fourcc": "MJPG"` in the camera config or they cap out at 10fps instead
   of the requested 30fps (USB bandwidth limit of uncompressed YUYV).
 - **Calibration files live on the HOST**, not in this repo:
   `~/.cache/huggingface/lerobot/calibration/{robots/so100_follower,teleoperators/so100_leader}/*.json`.
+
+## Before every session: `./preflight.sh`
+
+**Run it first, every time, and again after anything touches the hardware.**
+
+Hardware state is not like software state. Software state is reconstructible — a
+checkout and a rebuild give you a known starting point. Hardware state is persistent,
+invisible to git, owned exclusively by one process at a time, and *changed by the act of
+touching it*. Nothing in this repository can tell you what is currently in the servos'
+EEPROM or who holds a serial port. You have to ask the hardware.
+
+```bash
+./preflight.sh            # GO / NO-GO, read-only, ~10 seconds
+```
+
+It establishes the four facts every other conclusion depends on:
+
+| check | why it matters |
+|---|---|
+| Port ownership — containers **and** host processes | one owner per port; two tools that each work alone will break each other |
+| Device identity by USB adapter serial | `ttyACM` numbering follows plug order and flipped 3x in 6 days |
+| Servo calibration registers vs the calibration file | a `c` at lerobot's prompt rewrote these once, invisibly |
+| Camera nodes present | node numbers move on replug |
+
+It is read-only, never writes a servo register, and **refuses to open a port another
+process owns** (reports SKIPPED and NO-GO instead) — a check that perturbs what it
+measures is not a check. Every value is read twice and reported only if both reads
+agree, otherwise `UNSTABLE`; replies are validated for header, id and payload length
+before their bytes are believed.
+
+Run it:
+
+- at the start of every session
+- after any replug of an arm or a camera
+- after anything lerobot connects to (it can rewrite calibration)
+- before switching between the React app and the Python stack
+- **before forming any theory about a misbehaviour**
+
+That last one is the expensive lesson from 2026-08-17. Five hours went into theories
+about packet echo, DTR/RTS, stale Chrome port handles and USB resets, while all four
+primary facts above were unverified or drifting underneath. The check costs ten seconds.
+Its absence cost five hours.
+
+### Two rules that follow
+
+**One stack owns a port at a time.** Before any Python hardware command, quit Chrome
+*completely* — Disconnect alone leaked the file descriptor until `9caea12`. Before
+connecting in the app, Ctrl-C any teleop and confirm `docker ps` is empty. Getting this
+wrong produces symptoms that look nothing like each other: `Failed to open serial
+port`, `The device has been lost`, `Errno 16 Device or resource busy`, or lerobot's
+`Could not connect on port`. All four are the same problem.
+
+**At lerobot's calibration prompt, press ENTER — never `c`.** `c` runs a fresh
+calibration and writes newly measured values into the servo EEPROM. Interrupted before
+saving, it leaves every calibration file on disk at its old values while the hardware
+has drifted away from them — and everything downstream then reports a mismatch that
+reads exactly like a software bug. To repair: run any lerobot connect, press ENTER to
+write the file back to the motors, then `./preflight.sh` to confirm register by
+register.
 
 ## Running anything that touches the real robot
 

@@ -33,6 +33,24 @@ const FEETECH_REPLY_TIMEOUT_MS = 300;
  */
 const FEETECH_SAMPLE_TIMEOUT_MS = 25;
 
+/**
+ * Auto-connect on load (see the effect near handleDisconnect).
+ *
+ * requestPort() needs a user gesture and no code gets around that, so the follower has
+ * to be picked by hand exactly once. getPorts() then returns it on every later load and
+ * it can be opened with no gesture at all.
+ *
+ * Identifying WHICH granted port is the follower cannot be done from getInfo(): both
+ * adapters on this bench are 1a86:55d3, byte-identical to the browser. So the arm is
+ * asked to identify itself -- servo 1's Homing_Offset is -1317 on the follower and -988
+ * on the leader, and a port whose servo 1 does not match the follower's calibration is
+ * released untouched. Same lesson as the ttyACM mapping: identify hardware by what is
+ * on it, never by the name it happens to have been given.
+ */
+const CH_ADAPTER_VENDOR_ID = 0x1a86;
+const AUTO_CONNECT_BAUD = 1_000_000;
+const HOMING_OFFSET_ADDR = 31;      // STS_SMS_SERIES_CONTROL_TABLE["Homing_Offset"]
+
 type FeetechCalibration = Record<ServoId, { minTick: number; maxTick: number; homingOffset: number }>;
 
 function readFeetechCalibration(): FeetechCalibration | null {
@@ -395,27 +413,80 @@ export default function App() {
       if (port === leaderSerialPort) {
         throw new Error('This USB serial port is reserved for the leader arm. Disconnect the leader or select the other USB Single Serial device for the follower.');
       }
-      await port.open({ baudRate });
-      serialPortRef.current = port;
-      setFollowerSerialPort(port);
-
-      const writer = port.writable.getWriter();
-      portWriterRef.current = writer;
-      serialRxBufferRef.current = new Uint8Array();
-      void startSerialReader(port);
-
-      setConnectionType('webserial');
-      setConnectionStatus('connected');
-      setVerifiedServoIds([]);
-      setServoPositions({});
-      setIsCalibrationVerified(false);
-      setIsMotionArmed(false);
-      hardwareMotionBlockReasonRef.current = null;
+      await attachFollowerPort(port, baudRate);
       logMessage(`WebSerial open at ${baudRate} baud. Select "Verify servos" before attempting motion.`, 'info');
     } catch (err: any) {
       logMessage(`WebSerial Connection Failed: ${err.message}`, 'error');
       throw err;
     }
+  };
+
+  /**
+   * Wire an already-obtained SerialPort up as the follower.
+   *
+   * Split out of handleConnectWebSerial so the auto-connect path reuses this exact
+   * wiring rather than keeping a parallel copy that drifts out of step -- three files
+   * holding their own copy of the port mapping is what made the 2026-08-17 replug
+   * dangerous, and the same trap applies to connection logic.
+   *
+   * Never arms motion. Arming stays a deliberate human action.
+   */
+  const attachFollowerPort = async (port: any, baudRate: number) => {
+    await port.open({ baudRate });
+    serialPortRef.current = port;
+    setFollowerSerialPort(port);
+
+    const writer = port.writable.getWriter();
+    portWriterRef.current = writer;
+    serialRxBufferRef.current = new Uint8Array();
+    void startSerialReader(port);
+
+    setConnectionType('webserial');
+    setConnectionStatus('connected');
+    setVerifiedServoIds([]);
+    setServoPositions({});
+    setIsCalibrationVerified(false);
+    setIsMotionArmed(false);
+    hardwareMotionBlockReasonRef.current = null;
+  };
+
+  /**
+   * Release a port we opened and decided not to keep.
+   *
+   * Mirrors handleDisconnect's ordering deliberately: cancel the reader AND release its
+   * lock before close(), because close() rejects while the stream is still locked and a
+   * swallowed rejection leaks the descriptor -- which is how Chrome sat on
+   * /dev/ttyACM0 for twenty minutes after Disconnect (see 9caea12). A probe that leaks
+   * the port it rejected would be worse than no probe.
+   */
+  const releaseFollowerPort = async (port: any) => {
+    serialReadLoopActiveRef.current = false;
+    if (serialReaderRef.current) {
+      try {
+        await serialReaderRef.current.cancel();
+        await Promise.resolve();
+        try {
+          serialReaderRef.current.releaseLock();
+        } catch {}
+      } catch {}
+      serialReaderRef.current = null;
+    }
+    if (portWriterRef.current) {
+      try {
+        portWriterRef.current.releaseLock();
+      } catch {}
+      portWriterRef.current = null;
+    }
+    try {
+      await port.close();
+    } catch (err: any) {
+      logMessage(`Could not release a probed serial port: ${err?.message ?? err}. `
+        + 'The browser still holds it; quit Chrome completely before using the Python stack.', 'warn');
+    }
+    serialPortRef.current = null;
+    setFollowerSerialPort(null);
+    setConnectionType('simulation');
+    setConnectionStatus('connected');
   };
 
   const queryFeetechPacket = useCallback(async (servoId: number, packet: Uint8Array, timeoutMs?: number) => {
@@ -752,6 +823,110 @@ export default function App() {
     hardwareMotionBlockReasonRef.current = null;
     logMessage('Switched to Digital Twin Simulation Mode.', 'info');
   };
+
+  /**
+   * Ask the arm on the currently attached port whether it is the follower.
+   *
+   * Reads servo 1's Homing_Offset and compares it to the follower's own calibration.
+   * The two arms are far apart there (-1317 against the leader's -988), so this is
+   * unambiguous, and it is READ ONLY -- no motion, nothing written.
+   */
+  const probeIsFollower = async () => {
+    const expected = feetechCalibration?.base;
+    if (!expected) return false;
+    try {
+      const reply = await queryFeetechPacket(1, buildReadPacket(1, HOMING_OFFSET_ADDR, 2));
+      if (!reply || reply.parameters.length < 2) return false;
+      return readSignedWord(reply.parameters, FEETECH_SIGN_BIT.homingOffset) === expected.homingOffset;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Reconnect the follower on load, so a session starts ready instead of with a ritual.
+   *
+   * requestPort() requires a user gesture, so the adapter must be chosen by hand ONCE.
+   * After that getPorts() returns it on every load and it opens with no gesture. Both
+   * adapters report 1a86:55d3 so the browser cannot tell them apart -- each granted
+   * candidate is therefore opened, asked to identify itself via probeIsFollower(), and
+   * released untouched if it turns out to be the leader.
+   *
+   * Deliberately stops at verified. It connects and runs the same verification the
+   * button runs, and does NOT arm motion: arming stays a deliberate human action with
+   * the arm in view.
+   *
+   * Failure is reported, never silent. If a granted port will not open it is almost
+   * always another owner -- a teleop container or another tab -- and the message says
+   * so, because that single confusion consumed most of 2026-08-17.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const autoConnect = async () => {
+      const serial = (navigator as any).serial;
+      if (!serial?.getPorts) return;
+      if (!feetechCalibration) {
+        logMessage('Auto-connect skipped: VITE_FEETECH_CALIBRATION is missing or invalid, '
+          + 'so a port could not be identified as the follower.', 'warn');
+        return;
+      }
+      if (serialPortRef.current) return;
+
+      let granted: any[] = [];
+      try {
+        granted = await serial.getPorts();
+      } catch (err: any) {
+        logMessage(`Auto-connect could not list granted ports: ${err?.message ?? err}`, 'warn');
+        return;
+      }
+
+      const candidates = granted.filter((port: any) => {
+        const info = typeof port.getInfo === 'function' ? port.getInfo() : null;
+        return info?.usbVendorId === CH_ADAPTER_VENDOR_ID;
+      });
+      if (candidates.length === 0) {
+        logMessage('Auto-connect: no serial port has been granted to this page yet. Connect the '
+          + 'follower once with "Connect Hardware"; from then on it reconnects itself on load.', 'info');
+        return;
+      }
+
+      logMessage(`Auto-connect: ${candidates.length} granted adapter(s) found; identifying the `
+        + 'follower by its calibration.', 'info');
+
+      for (const port of candidates) {
+        if (cancelled || serialPortRef.current) return;
+        try {
+          await attachFollowerPort(port, AUTO_CONNECT_BAUD);
+        } catch (err: any) {
+          logMessage(`Auto-connect: a granted adapter would not open (${err?.message ?? err}). `
+            + 'That is usually another owner holding it -- a teleop container or another tab. '
+            + 'Run ./preflight.sh, which names the holder.', 'warn');
+          continue;
+        }
+        if (cancelled) return;
+
+        if (await probeIsFollower()) {
+          logMessage('Auto-connect: follower identified by its own calibration. Verifying the bus…', 'info');
+          await handleVerifyFeetechBus();
+          logMessage('Auto-connect done. Motion is NOT armed -- arm it yourself with the arm in view.', 'info');
+          return;
+        }
+
+        logMessage('Auto-connect: that adapter answered with a calibration that is not the '
+          + "follower's (most likely the leader). Releasing it untouched.", 'info');
+        await releaseFollowerPort(port);
+      }
+
+      logMessage('Auto-connect: none of the granted adapters identified as the follower. Connect '
+        + 'it by hand, and check ./preflight.sh if that is unexpected.', 'warn');
+    };
+
+    void autoConnect();
+    return () => { cancelled = true; };
+    // Mount only: this is a session-start action, not something to re-run on re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * A physical unplug orphans the WebSerial handle, and until now nothing noticed.
