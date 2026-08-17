@@ -703,6 +703,17 @@ export default function App() {
     if (serialReaderRef.current) {
       try {
         await serialReaderRef.current.cancel();
+        // cancel() only unblocks the pending read; the lock is dropped by the read
+        // loop's own finally, one microtask later. Closing before that lands makes
+        // port.close() reject with "port is already locked" -- and the swallowed
+        // catch below turned that into a silently leaked file descriptor. Measured
+        // 2026-08-17: Chrome still held fd 87 on /dev/ttyACM0 twenty minutes after
+        // Disconnect, so lerobot could not open the follower at all ("Could not
+        // connect on port '/dev/ttyACM0'"), and only quitting the browser freed it.
+        await Promise.resolve();
+        try {
+          serialReaderRef.current.releaseLock();
+        } catch {}
       } catch {}
       serialReaderRef.current = null;
     }
@@ -713,9 +724,21 @@ export default function App() {
       portWriterRef.current = null;
     }
     if (serialPortRef.current) {
+      // A close() failure must be reported, not swallowed. The OS descriptor stays
+      // open when this rejects, the port keeps its exclusive lock, and the next thing
+      // to want it -- lerobot, a fresh connect, anything -- fails with EBUSY for a
+      // reason nothing on screen explains. Whoever hits that deserves to be told the
+      // browser still owns the port and has to be quit.
       try {
         await serialPortRef.current.close();
-      } catch (e) {}
+      } catch (e: any) {
+        logMessage(
+          `Could not release the serial port: ${e?.message ?? e}. The browser still `
+          + 'holds it, so lerobot and any new connection will fail with "device busy" '
+          + 'until Chrome is quit completely.',
+          'error'
+        );
+      }
       serialPortRef.current = null;
       setFollowerSerialPort(null);
     }
