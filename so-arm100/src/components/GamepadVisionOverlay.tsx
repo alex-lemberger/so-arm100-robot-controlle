@@ -686,7 +686,11 @@ export const GamepadVisionOverlay: React.FC<GamepadVisionOverlayProps> = ({
               </span>
             )}
           </div>
-          <p className="mt-1 text-[11px] text-zinc-400">Records both videos and commanded joint targets at 20 Hz. It does not move the robot.</p>
+          {/* Interpolated from the constant, not written out. This said "20 Hz" while
+              TARGET_SAMPLE_HZ was 30 -- a caption cannot be allowed to drift from the
+              loop it describes, least of all one stating the sample rate of training
+              data. */}
+          <p className="mt-1 text-[11px] text-zinc-400">Records both videos and commanded joint targets at {TARGET_SAMPLE_HZ} Hz. It does not move the robot.</p>
         </div>
         <button
           onClick={isRecordingEpisode ? () => void stopEpisodeRecording() : startEpisodeRecording}

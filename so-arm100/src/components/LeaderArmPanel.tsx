@@ -431,13 +431,36 @@ export const LeaderArmPanel: React.FC<LeaderArmPanelProps> = ({
         <div className="flex items-center gap-2">
           {leaderState.connected ? (
             <div className="flex items-center gap-2">
+              {/* One label per state.
+                  This collapsed 'disconnected', 'verifying' AND 'error' into a single
+                  LEADER_UNVERIFIED, so a verification still in flight looked identical
+                  to a hard failure and to never having connected -- while a green
+                  pulsing dot said "fine" through all three. On 2026-08-17 that badge
+                  is what sent an hour of debugging into the wrong half of the system:
+                  it was read as "the leader arm is broken" when the arm was perfect and
+                  the real message was sitting in connectionMessage below. The actual
+                  reason always lives there; this is only ever a summary. */}
               <span className={`border px-3 py-1.5 rounded-sm text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 ${
                 connectionStatus === 'ready' || connectionStatus === 'simulation'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                  : connectionStatus === 'error'
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
               }`}>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>{connectionStatus === 'ready' ? 'LEADER_READY' : connectionStatus === 'simulation' ? 'LEADER_SIMULATED' : 'LEADER_UNVERIFIED'}</span>
+                <span className={`w-2 h-2 rounded-full ${
+                  connectionStatus === 'ready' || connectionStatus === 'simulation'
+                    ? 'bg-emerald-400 animate-ping'
+                    : connectionStatus === 'error'
+                      ? 'bg-rose-400'
+                      : 'bg-amber-400 animate-ping'
+                }`} />
+                <span>{
+                  connectionStatus === 'ready' ? 'LEADER_READY'
+                    : connectionStatus === 'simulation' ? 'LEADER_SIMULATED'
+                    : connectionStatus === 'verifying' ? 'LEADER_VERIFYING'
+                    : connectionStatus === 'error' ? 'LEADER_ERROR'
+                    : 'LEADER_DISCONNECTED'
+                }</span>
               </span>
               <button
                 onClick={() => void handleDisconnectLeader()}

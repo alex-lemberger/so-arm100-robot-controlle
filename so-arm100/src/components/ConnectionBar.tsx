@@ -126,7 +126,10 @@ export const ConnectionBar: React.FC<ConnectionBarProps> = ({
                   className="px-3.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-black uppercase tracking-tight rounded-sm border border-cyan-500/30 transition"
                   title="Sends non-motion Feetech PING and present-position READ packets to IDs 1–6"
                 >
-                  Verify Servos {verifiedServoIds.length > 0 ? `${verifiedServoIds.length}/6` : ''}
+                  {/* Always show the count. Hiding it at zero made a verify that found
+                      nothing look exactly like a button that did nothing at all -- which
+                      on 2026-08-17 is precisely how it was read. "0/6" is a result. */}
+                  Verify Servos {verifiedServoIds.length}/6
                 </button>
 
                 <button
