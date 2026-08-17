@@ -29,6 +29,23 @@ if [ -z "$FOLLOWER_PORT" ] || [ -z "$LEADER_PORT" ]; then
 fi
 echo "follower $FOLLOWER_PORT   leader $LEADER_PORT   (read from loop.py CONFIG)"
 echo "If that looks wrong, run ./verify_ports.sh -- do not edit this script."
+echo
+echo "#############################################################################"
+echo "# If lerobot asks:                                                          #"
+echo "#                                                                           #"
+echo "#   'Press ENTER to use provided calibration file ... or type c ... to run   #"
+echo "#    calibration:'                                                          #"
+echo "#                                                                           #"
+echo "# PRESS ENTER. Never 'c' unless you intend to recalibrate and will see it    #"
+echo "# through. On 2026-08-17 a 'c' answered here ran a fresh calibration, wrote  #"
+echo "# newly measured values into the servo EEPROM, and was interrupted before    #"
+echo "# saving -- so every calibration file on disk stayed at its old values while #"
+echo "# the hardware drifted away from them. The app then correctly reported a     #"
+echo "# calibration mismatch, which read as a bug and cost five hours.             #"
+echo "#                                                                           #"
+echo "# Run ./preflight.sh afterwards to confirm the registers still match.        #"
+echo "#############################################################################"
+echo
 
 exec ./hw_docker.sh lerobot-teleoperate \
   --robot.type=so100_follower \
