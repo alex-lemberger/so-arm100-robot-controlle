@@ -81,10 +81,31 @@ CONFIG = {
     "rollout_max_relative_target": 25.0,
 }
 
-# Enforced start-pose diversity. Two previous recording sessions were meant to
-# vary the piece's start pose and delivered essentially none, because it was
-# left to intent. Cycle this grid in order and mark the positions on the paper.
-POSITION_GRID = [(pos, rot) for pos in ("left", "centre", "right") for rot in (0, 45, 90, 135)]
+# Enforced placement diversity: a coarse pattern for the human to follow, one row per
+# episode. Two previous recording sessions were meant to vary the piece's start pose
+# and delivered essentially none, because it was left to intent. Two things this fixes
+# about the version that produced circle_grasp_v1's 15x19mm patch of actual placements
+# (measured 2026-08-16: three dense clusters over 81 episodes):
+#
+#   - That grid varied left/centre/right ONLY. It never asked for near/far variation
+#     at all, so every episode sat at roughly one distance from the base and half the
+#     coverage was missing by construction.
+#   - Positions are ordered so the piece MOVES EVERY EPISODE. Rotation is the outer
+#     loop, so consecutive rows never repeat a spot; the old nesting would have left
+#     the piece in one place for four takes running.
+#
+# Deliberately NOT millimetres, and deliberately not surveyed. Standard LeRobot
+# practice is that the human moves the object by eye between takes -- what matters is
+# that consecutive episodes look different and the whole reachable area gets used, not
+# that anyone can name the coordinates afterwards. The extremes are named as extremes
+# because the point of the far corners is that they are awkward: "left" with nothing
+# else said drifts toward the middle over a long session, which is what happened twice.
+REACH = ("near", "mid", "far")          # distance out from the arm's base
+SIDE = ("left", "centre", "right")
+POSITION_GRID = [(f"{reach} {side}", rot)
+                 for rot in (0, 45, 90, 135)
+                 for reach in REACH
+                 for side in SIDE]
 
 
 def dataset_root(name: str) -> Path:
@@ -164,7 +185,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         print("\nCycle these start poses in order, one per episode:")
         for i in range(args.episodes):
             pos, rot = POSITION_GRID[i % len(POSITION_GRID)]
-            print(f"  ep {i:>3}  piece {pos:<6} rotated {rot:>3} deg")
+            print(f"  ep {i:>3}  piece {pos:<12} rotated {rot:>3} deg")
 
     print("\nRun this in YOUR terminal, not through an agent -- you need the live")
     print("'Recording episode N' cue and the keyboard controls to re-record a bad take.\n")
@@ -202,7 +223,7 @@ def cmd_grid(args: argparse.Namespace) -> int:
     print(f"\nStart-pose grid — {args.episodes} episodes. Mark the positions on the paper.\n")
     for i in range(args.episodes):
         pos, rot = POSITION_GRID[i % len(POSITION_GRID)]
-        print(f"  ep {i:>3}  piece {pos:<6} rotated {rot:>3} deg")
+        print(f"  ep {i:>3}  piece {pos:<12} rotated {rot:>3} deg")
     print("\nCycle in order. Do not improvise -- that is what failed the last two times.\n")
     return 0
 
