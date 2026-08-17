@@ -60,22 +60,55 @@ STEP_DEG = 1.5          # per-tick joint move: slow enough to be stoppable by ha
 TICK_S = 0.03
 
 
+# Hue floor of 30, not the 60 that scripts/analyse_placement_generalization.py uses.
+# That 60 is correct for the OVERHEAD camera and wrong here: measured on a real wrist
+# frame (2026-08-17), the peg's green sits at hue 44 and the board's empty circle at
+# 48, so `hh > 60` matched 8 pixels in the whole 1280x720 image and the check reported
+# PEG NOT VISIBLE while the peg was plainly there in the PNG it had just written. The
+# wrist camera's white balance runs warmer than the overhead one -- the same hue slide
+# align_board.py:67 documents. A narrow window is what made check_alignment.sh send us
+# after the wrong object; do not re-narrow this without measuring a wrist frame first.
+HUE = (30, 110)
+# The loose peg is lit paper-side up (median V 76, S 129). A seated piece sits in a
+# shadowed pocket and the empty circle is a hole (V 45, S 205). Without this the
+# largest-blob rule can hand back the BOARD's position labelled as the peg's, which is
+# the failure mode that costs a week -- a wrong number is worse than no number.
+RECESS_MAX_V = 55
+
+
 def peg_in_wrist(bgr):
-    """(x, y) of the peg in the wrist frame as fractions, or None."""
+    """Peg position in the wrist frame as fractions, plus every green candidate.
+
+    Returns ((x, y) or None, candidates). Candidates are reported so a human can see
+    what was found and rejected: this check is the readout for the home-pose
+    experiment, and an instrument that fails silently is how the last two eval metrics
+    went wrong.
+    """
     import cv2
 
     h, w = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     hh, s, v = (hsv[:, :, i].astype(int) for i in range(3))
-    mask = ((hh > 60) & (hh < 110) & (s > 45) & (v > 40)).astype(np.uint8)
+    mask = ((hh > HUE[0]) & (hh < HUE[1]) & (s > 45) & (v > 40)).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
-    n, _labels, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
-    blobs = [(stats[i, cv2.CC_STAT_AREA], cents[i]) for i in range(1, n)
-             if stats[i, cv2.CC_STAT_AREA] > 2500]
-    if not blobs:
-        return None
-    _area, c = max(blobs)
-    return c[0] / w, c[1] / h
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
+
+    candidates = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area <= 2500:
+            continue
+        sel = labels == i
+        candidates.append({
+            "area": area,
+            "xy": (float(cents[i][0] / w), float(cents[i][1] / h)),
+            "v": int(np.median(v[sel])),
+            "s": int(np.median(s[sel])),
+        })
+    candidates.sort(key=lambda c: -c["area"])
+
+    lit = [c for c in candidates if c["v"] > RECESS_MAX_V]
+    return (max(lit, key=lambda c: c["area"])["xy"] if lit else None), candidates
 
 
 def report_wrist(robot) -> None:
@@ -92,9 +125,14 @@ def report_wrist(robot) -> None:
     frame = frame[:, :, ::-1] if frame.shape[-1] == 3 else frame
     out = REPO_ROOT / "wrist_home_check.png"
     cv2.imwrite(str(out), np.ascontiguousarray(frame))
-    found = peg_in_wrist(np.ascontiguousarray(frame))
+    found, candidates = peg_in_wrist(np.ascontiguousarray(frame))
+    for c in candidates:
+        role = "peg?" if c["v"] > RECESS_MAX_V else "recess/shadowed piece"
+        print(f"    green blob area {c['area']:6d} at ({c['xy'][0]:.2f}, {c['xy'][1]:.2f})"
+              f"  V={c['v']:3d} S={c['s']:3d}  -> {role}")
     if found is None:
-        print(f"  PEG NOT VISIBLE in the wrist view. Wrote {out} -- look at it.")
+        why = "no green found at all" if not candidates else "every green blob looked like a recess"
+        print(f"  PEG NOT VISIBLE in the wrist view ({why}). Wrote {out} -- look at it.")
         return
     x, y = found
     zy = (y - DEMO_WRIST_Y[0]) / DEMO_WRIST_Y[1]
