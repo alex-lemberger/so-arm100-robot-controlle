@@ -110,6 +110,20 @@ export default function App() {
   const serialReadLoopActiveRef = useRef(false);
   const serialRxBufferRef = useRef<Uint8Array>(new Uint8Array());
   const pendingFeetechResponsesRef = useRef(new Map<number, (packet: FeetechPacket) => void>());
+  /**
+   * Wire tracing, switched on only around a Verify Servos run.
+   *
+   * "No Feetech replies received" is a single opaque outcome that cannot tell
+   * "nothing came back at all" from "bytes came back and failed to parse" -- a dead
+   * bus versus a framing or baud problem, which have nothing to do with each other.
+   * On 2026-08-17 the follower answered 6/6 to a plain Python PING on the same port
+   * at the same baud, with DTR/RTS making no difference, while the app saw 0/6. That
+   * gap is only visible with the raw bytes in front of you.
+   *
+   * Off by default and auto-off after a run, because the 20Hz sampling loop during an
+   * episode would otherwise flood the log ring and the console.
+   */
+  const serialTraceRef = useRef(false);
   const wsClientRef = useRef<WebSocket | null>(null);
   const pendingHardwareJointsRef = useRef<JointState | null>(null);
   const hardwareCommandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -166,6 +180,22 @@ export default function App() {
       lastCommand: type === 'tx' ? text : prev.lastCommand,
       logs: [newEntry, ...prev.logs.slice(0, 100)]
     }));
+
+    // Mirror to the browser console as well as the in-app drawer.
+    //
+    // Until 2026-08-17 this function was the ONLY sink for every diagnostic the app
+    // produces, and it wrote exclusively into telemetry.logs -- so unless the log
+    // drawer happened to be open, the app was silent no matter what went wrong.
+    // "Verify Servos does nothing, also no console output" was exactly this: the
+    // handler ran and reported, into a panel nobody was looking at, while devtools
+    // stayed empty. The button label compounded it by only showing "N/6" once at
+    // least one servo replies, so a failed verify looks identical to a dead button.
+    //
+    // Also only the log ring holds the last 100 entries, so anything older was gone
+    // for good. The console keeps its own scrollback, and console output can be
+    // copied out of devtools and pasted to someone who is not at the bench.
+    const sink = type === 'error' ? console.error : type === 'warn' ? console.warn : console.log;
+    sink(`[SO-ARM100:${type}] ${text}`);
   }, []);
 
   // Text commands are intended for a controller bridge on WebSocket. Direct WebSerial
@@ -212,6 +242,8 @@ export default function App() {
         if (done) break;
         if (!value) continue;
 
+        if (serialTraceRef.current) logMessage(`RX ${value.length}B: ${bytesToHex(value)}`, 'rx');
+
         const combined = new Uint8Array(serialRxBufferRef.current.length + value.length);
         combined.set(serialRxBufferRef.current);
         combined.set(value, serialRxBufferRef.current.length);
@@ -221,8 +253,39 @@ export default function App() {
         packets.forEach(processFeetechPacket);
       }
     } catch (err: any) {
+      // The read loop dying means the connection is dead, whatever the message says.
+      //
+      // This used to only log. But handleConnectWebSerial starts this loop with
+      // `void startSerialReader(port)`, so a failure here never reaches the connect
+      // path -- it went on to set connectionType 'webserial' and connectionStatus
+      // 'connected' regardless. On 2026-08-17 that produced a genuinely baffling
+      // hour: Chrome handed out a phantom port (its device registry still held the
+      // adapter's pre-replug entry), open() succeeded, the first read() threw "The
+      // device has been lost", and the UI reported a healthy connection. Verify
+      // Servos then wrote all six PINGs to a port with no reader attached and
+      // reported "No Feetech replies received" -- which reads as dead hardware,
+      // while the same servos answered 6/6 to a plain Python PING on the same port.
+      //
+      // So tear the connection down here and say what to do about it.
       if (serialReadLoopActiveRef.current) {
-        logMessage(`WebSerial receive error: ${err.message}`, 'error');
+        serialReadLoopActiveRef.current = false;
+        portWriterRef.current = null;
+        serialPortRef.current = null;
+        pendingFeetechResponsesRef.current.clear();
+        setFollowerSerialPort(null);
+        setVerifiedServoIds([]);
+        setServoPositions({});
+        setIsCalibrationVerified(false);
+        setIsMotionArmed(false);
+        setConnectionStatus('error');
+        hardwareMotionBlockReasonRef.current = `Serial read failed: ${err.message}`;
+        logMessage(
+          `WebSerial receive error: ${err.message} -- the connection is dead, not just quiet, `
+          + 'so verification and motion are locked. If this says the device has been lost, '
+          + 'Chrome is offering a stale port for an adapter that was replugged: quit Chrome '
+          + 'completely (every process), replug the adapter, then reopen and connect.',
+          'error'
+        );
       }
     } finally {
       if (serialReaderRef.current === reader) serialReaderRef.current = null;
@@ -358,7 +421,7 @@ export default function App() {
   const queryFeetechPacket = useCallback(async (servoId: number, packet: Uint8Array, timeoutMs?: number) => {
     const responsePromise = waitForFeetechResponse(servoId, timeoutMs);
     try {
-      await sendFeetechPacket(packet, `Query servo S${servoId}`, false);
+      await sendFeetechPacket(packet, `Query servo S${servoId}`, serialTraceRef.current);
       return await responsePromise;
     } catch (err) {
       pendingFeetechResponsesRef.current.delete(servoId);
@@ -496,6 +559,11 @@ export default function App() {
       logMessage('Open a direct WebSerial connection before verifying the Feetech bus.', 'error');
       return;
     }
+
+    // Trace the wire for this run only, then switch off so episode sampling stays quiet.
+    // The window is generous: 6 servos x up to 3 queries x a 300ms timeout is ~5s worst case.
+    serialTraceRef.current = true;
+    window.setTimeout(() => { serialTraceRef.current = false; }, 15_000);
 
     setIsMotionArmed(false);
     setIsCalibrationVerified(false);
@@ -661,6 +729,69 @@ export default function App() {
     hardwareMotionBlockReasonRef.current = null;
     logMessage('Switched to Digital Twin Simulation Mode.', 'info');
   };
+
+  /**
+   * A physical unplug orphans the WebSerial handle, and until now nothing noticed.
+   *
+   * The read loop above cannot detect it: on a removed device `reader.read()`
+   * neither resolves with `done` nor reliably rejects, so it sits waiting on a port
+   * whose device node the kernel has already destroyed. connectionStatus therefore
+   * stayed 'connected', ConnectionBar kept rendering "Verify Servos", and every PING
+   * went into a dead descriptor -- so verification returned 0/6 and the motion button
+   * stayed locked with nothing on screen explaining why.
+   *
+   * Measured on 2026-08-17: Chrome held an fd opened at 12:35 against a /dev/ttyACM1
+   * that the kernel had recreated at 12:57 after a replug. The calibration and the
+   * servos were both fine; the handle was 22 minutes stale.
+   *
+   * navigator.serial fires 'disconnect' when the device goes away, so listen and say
+   * so. The dead port is deliberately NOT closed: close() on a removed device can
+   * reject or hang, and the handle is worthless regardless -- dropping the refs and
+   * telling the operator to reconnect is the whole fix. A replugged device always
+   * needs a freshly selected port; no amount of retrying revives the old one.
+   */
+  useEffect(() => {
+    const serial = (navigator as any).serial;
+    if (!serial?.addEventListener) return;
+
+    const handleSerialDisconnect = (event: any) => {
+      const port = event.target ?? event.port;
+      if (!port) return;
+
+      if (port === leaderSerialPort) {
+        logMessage(
+          'Leader arm unplugged: its WebSerial handle is now dead. Reconnect the leader '
+          + 'adapter in the Leader Arm panel and verify its bus again.',
+          'error'
+        );
+        return;
+      }
+      if (port !== serialPortRef.current) return;
+
+      serialReadLoopActiveRef.current = false;
+      serialReaderRef.current = null;
+      portWriterRef.current = null;
+      serialPortRef.current = null;
+      pendingFeetechResponsesRef.current.clear();
+      setFollowerSerialPort(null);
+
+      setVerifiedServoIds([]);
+      setServoPositions({});
+      setIsCalibrationVerified(false);
+      setIsMotionArmed(false);
+      setConnectionStatus('disconnected');
+      hardwareMotionBlockReasonRef.current = 'Follower arm was unplugged.';
+      logMessage(
+        'Follower arm unplugged: the WebSerial handle is dead, verification is cleared '
+        + 'and motion is locked. Reconnect the follower adapter and run Verify Servos -- '
+        + 'a replugged device always needs a freshly selected port.',
+        'error'
+      );
+    };
+
+    serial.addEventListener('disconnect', handleSerialDisconnect);
+    return () => serial.removeEventListener('disconnect', handleSerialDisconnect);
+  }, [leaderSerialPort, logMessage]);
 
   // Telemetry Simulation Tick
   useEffect(() => {
