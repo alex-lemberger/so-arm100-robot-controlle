@@ -10,7 +10,7 @@ fix it here directly rather than writing a new dated doc.
 described below and still lists Mac ports/paths — treat this file as the
 override for anything hardware-related.
 
-Last verified: 2026-08-14.
+Last verified: 2026-08-17.
 
 ## Machine
 
@@ -95,20 +95,69 @@ Its absence cost five hours.
 
 ### Two rules that follow
 
-**One stack owns a port at a time.** Before any Python hardware command, quit Chrome
-*completely* — Disconnect alone leaked the file descriptor until `9caea12`. Before
-connecting in the app, Ctrl-C any teleop and confirm `docker ps` is empty. Getting this
-wrong produces symptoms that look nothing like each other: `Failed to open serial
-port`, `The device has been lost`, `Errno 16 Device or resource busy`, or lerobot's
-`Could not connect on port`. All four are the same problem.
+**One stack owns a port at a time.** Before any Python hardware command, disconnect
+hardware in the app and confirm Chrome no longer owns `/dev/ttyACM*`; if there is any
+doubt, quit Chrome completely. Before connecting in the app, Ctrl-C any teleop and
+confirm `docker ps` is empty. A real ownership conflict produces `Failed to open serial
+port`, `Errno 16 Device or resource busy`, or lerobot's `Could not connect on port`.
+Do not automatically classify Chrome's `The device has been lost` as an ownership
+conflict: on 2026-08-17 that message was reproduced with no competing owner and was an
+app connection-sequencing regression (see "React app WebSerial" below).
 
 **At lerobot's calibration prompt, press ENTER — never `c`.** `c` runs a fresh
-calibration and writes newly measured values into the servo EEPROM. Interrupted before
-saving, it leaves every calibration file on disk at its old values while the hardware
-has drifted away from them — and everything downstream then reports a mismatch that
-reads exactly like a software bug. To repair: run any lerobot connect, press ENTER to
-write the file back to the motors, then `./preflight.sh` to confirm register by
-register.
+calibration and writes newly measured values. Interrupted before saving, it leaves every
+calibration file on disk at its old values while the hardware has drifted away from
+them — and everything downstream then reports a mismatch that reads exactly like a
+software bug.
+
+**LeRobot 0.6.1's existing-file restore is not durable on this arm.** Its reconnect
+path calls `write_calibration()` while the Feetech EEPROM `Lock` register is still 1,
+so the expected values read back correctly from live registers but revert after USB
+power is removed. Its default `bus.disconnect()` also calls `disable_torque()`, which
+writes `Lock=0` again. A durable repair must do this exact sequence:
+
+1. `disable_torque()` (torque off and `Lock=0`) and verify both.
+2. Write every saved `Homing_Offset`, `Min_Position_Limit`, and
+   `Max_Position_Limit`; read every value back twice.
+3. Write and verify `Lock=1` on all six servos.
+4. Call `disconnect(disable_torque=False)` so disconnect does not unlock them again.
+5. Physically replug the adapter, then run `./preflight.sh`. Only values that still
+   match after that power cycle are proven to be in EEPROM.
+
+For follower `white`, the durable values verified after a physical replug on
+2026-08-17 are:
+
+| servo | min | max | homing offset | Lock |
+|---|---:|---:|---:|---:|
+| S1 | 715 | 3253 | -1317 | 1 |
+| S2 | 888 | 3288 | -960 | 1 |
+| S3 | 774 | 3005 | -851 | 1 |
+| S4 | 914 | 3229 | -685 | 1 |
+| S5 | 0 | 4095 | 453 | 1 |
+| S6 | 2002 | 3507 | -1647 | 1 |
+
+### React app WebSerial
+
+The proven follower connection sequence is deliberately manual:
+
+1. Click **Connect Hardware** and explicitly select the attached follower adapter.
+2. Let the port open without sending identification traffic.
+3. Click **Verify Servos**; only after verification may motion be armed.
+
+Do not reintroduce session-start auto-connect or an immediate calibration probe. Commit
+`c5039fe` added both, and the app began failing immediately after `open()` with Chrome's
+`The device has been lost`. Chrome 151, the 7.0.0-28 kernel, the USB topology, and the
+adapter were unchanged from a successful 30 Hz recording on 2026-08-11; the kernel log
+showed normal enumeration and no reset/error, and Python still read the same bus at
+1 Mbaud. Restoring the earlier manual open-then-verify sequence immediately restored
+recording and produced 60 new episodes. The exact Chrome/CDC-ACM timing race is not
+proven, but the regression boundary is.
+
+Both CH adapters report the same VID:PID (`1a86:55d3`), so the browser's product name
+does not distinguish leader from follower. Keep only the intended arm attached while
+granting a new browser port if the chooser is ambiguous. Stream errors must clear
+verification, lock motion, release reader/writer locks, and close the failed port; they
+must not silently leave the UI in a connected state or delete the browser permission.
 
 ## Running anything that touches the real robot
 
@@ -145,9 +194,21 @@ else that needs `leisaac-sim:latest`:
 ./sim_docker.sh tests/smoke_wrist_camera_isaac.py
 ```
 
-Never hand-write that `docker run` line. Omitting its `/Users` read-only
-mount (where the robot USD lives) surfaces as an `is_homogeneous` assertion
-deep inside articulation init, which looks nothing like a missing mount.
+Never hand-write that `docker run` line. The full SO-101 new-calibration USD
+composition is vendored at `assets/isaac/so101_new_calib/`; simulation no longer
+depends on a personal Downloads path or an extra `/Users` bind mount.
+
+**`./gpu_docker.sh <command>`** is the third wrapper: `lerobot-train:latest`
+with the GPU and the repo mount but **no `--device` flags at all**, for offline
+policy inference, held-out evaluation, dataset analysis, and training. Use it
+instead of the bare `docker run` line this file used to spell out. Because it
+cannot open `/dev/ttyACM*` or `/dev/video*`, nothing run through it can take
+the serial port away from a live bench.
+
+```bash
+./gpu_docker.sh python robot_learning/eval_smolvla_held_out.py --checkpoint <path> ...
+./gpu_docker.sh python robot_learning/diagnose_policy_chunk.py --checkpoint <path>
+```
 
 ## Looking at the scene
 
@@ -190,12 +251,12 @@ over, and no amount of care inside the gate can catch it: a gate cannot see what
 another script assembles. Making the scene one function is what makes "the
 approved scene" and "the exported scene" the same object.
 
-The gate's fingerprint covers `configs/simulation.yaml` **and** the code that
-turns it into a scene — `SCENE_SOURCE_FILES` in `src/bridge/scene_gate.py`, which
-is `src/isaac/scene_setup.py` and `src/isaac/camera_capture.py`. Whole-file
-hashes, so a comment-only edit invalidates an approval too: there is no way to
-know which edit to a scene builder changes pixels without rendering it and
-looking, which is the thing the approval attests to.
+The gate's fingerprint covers `configs/simulation.yaml`, `configs/robot_mapping.yaml`,
+the complete vendored robot USD composition, and the code that turns them into a
+picture (`src/isaac/scene_setup.py` and `src/isaac/camera_capture.py`). Whole-file
+hashes mean even a comment-only edit invalidates an approval: there is no reliable
+way to infer which scene edit changes pixels without rendering and looking, which
+is exactly what the approval attests to.
 
 It was config-only until 2026-08-16, and that gap was not theoretical — the board
 was rebuilt (pockets cut, pieces reshaped and reseated, knob materials rebound)
@@ -252,27 +313,169 @@ the release, and is 0 after — because the peg moved and the board did not.
 Displacing the whole episode uniformly would fix the grasp label and break the
 insert label.
 
-**Not yet wired into `scripts/generate_synthetic.py`.** That integration is what
-finally unlocks the gated pose axes; until it lands, the axes stay inert and
-`--allow-label-breaking` still produces mislabelled episodes.
+This is now wired into `scripts/generate_synthetic.py` behind the explicit
+`--warp-object-position` flag. A per-parent pose sidecar is mandatory when more
+than one parent is used; for the new top-camera set it is
+`outputs/episode-review/parent-object-poses-topcam-59.json`. The old
+`--allow-label-breaking` path is retired and raises immediately. Board pose remains
+fixed because moving the insertion target still requires a board-aware warp.
 
 ## Synthetic data: label-preserving vs label-breaking
 
-`scripts/generate_synthetic.py` copies the parent episode's actions
-**verbatim** (Rule 4). An axis is therefore only safe to randomize if the
-copied actions stay correct after it moves.
+`scripts/generate_synthetic.py` records a new commanded trajectory whenever object
+XY is randomized. It also records the measured simulated state, so the exporter can
+convert both back to the real dataset's units; parent labels are never copied onto a
+moved scene.
 
 - **Safe, on by default:** mass, friction, initial joint pose (spent before
   the settle-to-frame-0 phase), camera noise, and peg yaw (the peg is a
   cylinder, so yaw is geometrically a no-op — this stops being true for a
   non-symmetric object).
-- **Unsafe, inert:** object and board **pose**. Moving the target while the
-  labels still reach for its old location trains the policy to ignore the
-  target's position — the failure being fought on hardware. These live under
-  `randomization.label_breaking:` in `configs/simulation.yaml` and stay zero
-  unless `--allow-label-breaking` is passed. **Do not pass it** until the
-  actions are re-planned per variation, which needs IK (the repo has forward
-  kinematics only).
+- **Warped explicitly:** object XY. Use `--warp-object-position` and
+  `--parent-object-poses`; the safe envelope is ±30mm and every generated episode
+  must pass the IK quality gate.
+- **Still inert:** board pose. Moving the insertion target without a second,
+  board-aware warp would mislabel the insert phase.
+
+### Controlled grasp and insertion outcome
+
+The imported SO-101 fingers are shorter than the physical SO-100 contact geometry,
+so raw Isaac contact cannot reproduce the recorded grasp. Synthetic replay uses a
+transparent controlled model in `src/isaac/kinematic_grasp.py`: at grasp, a visual
+proxy follows the measured gripper-relative pose while the rigid peg is parked; a
+smooth endpoint correction accounts for the peg shifting inside the real fingers;
+at release, the proxy remains seated at the measured circle target while the rigid
+body stays parked. An earlier version handed the body back to PhysX, but a cylinder
+placed on the 4mm blind-pocket backing intermittently tunnelled through it and fell
+tens of metres; unrelated mass/friction draws then decided dataset eligibility.
+Provenance calls the deterministic replacement `visual_proxy_controlled_seating` and
+task outcomes `controlled_visual_proxy_endpoint`—it is an honest replay model, not a
+claim of physics-validated contact. The exporter uses the exact same model.
+
+Generation refuses an episode unless it demonstrates lift, transport, and final
+seating. The 2026-08-17 smoke at
+`data/synthetic/circle_insert_topcam_59_newcalib_smoke/` passed with 53.4mm lift,
+0.76mm final XY error, 0.203mm maximum warp residual, 4.11° maximum orientation
+change, and zero unconverged frames. It used the measured circle target
+`[-0.04170, -0.16952]m`, derived from all 59 final overview frames.
+
+```bash
+./sim_docker.sh scripts/generate_synthetic.py \
+  --dataset data/local/datasets/circle_insert_topcam_59_trimmed \
+  --parent-episodes 0 \
+  --parent-object-poses outputs/episode-review/parent-object-poses-topcam-59.json \
+  --config configs/robot_mapping.yaml --scene-config configs/simulation.yaml \
+  --warp-object-position --num-synthetic 1 --seed 0 \
+  --out-dir data/synthetic/circle_insert_topcam_59_newcalib_smoke \
+  --skip-scene-gate
+```
+
+`--skip-scene-gate` was appropriate only for that trajectory-only functional smoke
+and is recorded in its provenance. The production scene was re-rendered against
+`docs/reference/topcam-2026-08-17-episode-000-frame-000.png` and approved by Alex on
+2026-08-17. `gate_status("configs/simulation.yaml")` is current; any scene config,
+builder, camera-builder, robot mapping, or vendored USD change invalidates it.
+
+The gate-enforced end-to-end exporter smoke is
+`data/local/datasets/circle_insert_topcam_59_synth_export_final_smoke/`: one synthetic
+episode, 320 frames at 30 FPS, both 1280x720 AV1 cameras, no flat frames, warp quality
+gate passed (0.203mm maximum residual), and controlled-grasp provenance recorded as
+`visual_proxy_rigid_body_parked`. Its `meta/scene_gate.json` records the approval;
+no override was used.
+
+### Synthetic-to-real ratio experiment
+
+The production experiment is frozen in
+`data/evaluation/sim_real_ratio_experiment.json`. It reserves 12 spatially distributed
+real peg placements as a real-only holdout and uses the other 47 as training episodes
+and Isaac parents. Never generate synthetic children from the held-out episodes.
+
+The synthetic pool contains 94 passing episodes: exactly two children per training
+parent. Nested prefixes produce matched S:R conditions of 0, 0.25, 0.5, 1, and 2
+without changing the real training set. Use the same initialization, optimizer steps,
+training seed, held-out set, and hardware protocol for every condition. This ratio
+ablation—not one arbitrary mixed-data result—is the project's primary sim-to-real
+measurement.
+
+The shared training controls and exact master-dataset prefixes are frozen in
+`configs/sim_real_ratio_training.json`. The file pins the LeRobot Docker image by
+image digest, SmolVLA base by Hub commit and file hashes, seed, deterministic cuDNN,
+optimizer/scheduler, camera mapping, batch size, and step count. Launch through the
+validator so an incomplete master, changed base, or incorrect prefix fails before GPU
+training starts:
+
+On the current single RTX 5070 (12 GB), batch 32 exceeded VRAM during the smoke
+test. Batch 24 is the validated shared setting; it uses about 8.5 GB during
+training and takes roughly 3–3.5 hours per 20,000-step condition. The five-condition
+sweep is therefore a research-cost decision of about 16–18 hours and should be
+paused at condition boundaries when unattended time is limited. Do not silently
+change the batch size within a ratio comparison.
+
+```bash
+# One 10-step end-to-end gate first.
+python3 robot_learning/train_sim_real_ratio.py --condition real_only --smoke
+
+# Then run every full condition sequentially from the same immutable base.
+for condition in real_only synth_025x synth_050x synth_100x synth_200x; do
+  python3 robot_learning/train_sim_real_ratio.py --condition "$condition"
+done
+```
+
+The five selected master prefixes are respectively episodes `0:47`, `0:59`,
+`0:71`, `0:94`, and `0:141`. The master contains no holdout data and training-time
+evaluation stays disabled. Evaluate each saved checkpoint against the original
+59-real-episode dataset and explicit experiment holdout:
+
+```bash
+./gpu_docker.sh python robot_learning/eval_smolvla_held_out.py \
+  --checkpoint outputs/train/<condition>/checkpoints/020000/pretrained_model \
+  --dataset-root data/local/datasets/circle_insert_topcam_59_trimmed \
+  --repo-id local/circle_insert_topcam_59_trimmed \
+  --experiment data/evaluation/sim_real_ratio_experiment.json \
+  --device cuda --output outputs/evaluation/<condition>-held-out-mae.json
+```
+
+The next capability layer is the six-shape prompt-conditioned task described in
+`docs/multi-shape-synthetic-learning-plan.md`. Canonical learned-policy skills live in
+`configs/shape_sort_skills.json`; use `--skill place_circle` (or another registered
+skill) with `robot_learning/run_policy_prompt.py` and
+`robot_learning/closed_loop_step.py`. These are SmolVLA policy tools. The React
+`/api/ollama/generate-sequence` endpoint remains a separate language-to-keyframe
+planner and must not be presented as a trained visual skill.
+
+Generation retries rejected warps until the requested number of passing episodes is
+reached. For this first controlled pool, `--object-warp-scale 0.25` converts the
+configured +/-30mm per-axis draw into +/-7.5mm per axis (10.61mm maximum radial
+displacement), matching the measured reliable IK envelope. The applied scale, seed,
+attempt index, actual offset, warp metrics, and task outcome are recorded per episode.
+
+### Synthetic wrist camera
+
+The wrist camera is rigidly tracked from the imported robot's `gripper` link. Its
+current rest-pose calibration is position `[0.0, 0.0, 0.30]`, target
+`[0.0, -0.28, 0.24]`, focal length 15mm. These numbers were selected against real
+episode 0 at frames 0/40/151/200/245/300/319 so the board, circle, jaws, and loose or
+carried peg remain in view. The old pose appeared correct at frame 0 only because
+the exporter updated the tracked camera after rendering; later frames pointed into
+the arm or went black. The exporter now updates the camera after physics and before
+Replicator renders the timestep.
+
+Validate after any wrist-camera change with both:
+
+```bash
+./sim_docker.sh tests/smoke_wrist_camera_isaac.py
+./sim_docker.sh scripts/export_lerobot_dataset.py \
+  --real-dataset data/local/datasets/circle_insert_topcam_59_trimmed \
+  --synthetic-dir data/synthetic/circle_insert_topcam_59_newcalib_smoke \
+  --synthetic-episodes 0 --config configs/robot_mapping.yaml \
+  --scene-config configs/simulation.yaml \
+  --output data/local/datasets/<fresh-smoke-name> \
+  --repo-id local/<fresh-smoke-name>
+```
+
+Do not accept the wrist smoke's movement assertion alone: decode the exported wrist
+video and inspect approach, grasp, carry, release, and retreat frames. The bug above
+preserved a perfectly rigid camera-to-link offset while producing useless pixels.
 
 ### Lighting
 
@@ -624,7 +827,140 @@ are quietly confounded.
   job through `lerobot-train:latest`, or the DataLoader crashes on a shared
   memory limit.
 
+## Running a policy closed-loop on the arm
+
+**The working checkpoint is
+`outputs/train/circle_insert_real80_30k/checkpoints/030000/pretrained_model`**
+(trained by `./train_deploy.sh` on all 80 episodes -- the 59 plus 21 recorded
+for the place phase). On 2026-08-21 it completed the circle-insert task
+autonomously from the home pose on its first bench run, tag `real80_bench1`:
+grasped on chunk 6, transported on 7, released the piece seated in the pocket
+on 10, retreated on 11, no overrun on any chunk. This is the first checkpoint
+to seat the piece rather than stop 5-7mm short.
+`circle_insert_real59_30k/checkpoints/030000` also completes the task
+(2026-08-20) and is the fallback if the 80-episode model regresses.
+
+Final training loss does **not** rank these: `complete30_30k` had the lowest
+loss of the three (0.015) and scored 0/3 on the bench, where `real80_30k` has
+the highest (0.033) and works. Only the bench ranks a checkpoint.
+
+**Wrist framing at the start decides the trial, and joint-space coverage does
+not.** Bench score on 2026-08-21 was 2/3. The failure (`real80_bench3`) stalled
+at a joint posture 0.6 deg from a demonstrated grasp with 51 demos within
+10 deg -- the *best*-covered of the three trials, better than either success.
+What differed was the wrist view: the piece sat at x=0.66 (+2.3 sd against
+`DEMO_WRIST_X = (0.41, 0.11)`) and the board's pocket was out of frame
+entirely, where both successes had it as the largest blob at lower-left. The
+policy then re-emitted "hover, stay open" from every fresh observation for 8
+chunks and never requested a gripper close -- confirmed from the manifest's
+`requested` channel, so the harness was blameless. Do not answer this failure
+with more episodes or more joint-space coverage; the arm was where it belonged
+and the camera was not. `run_rollout_trial.sh` now refuses to roll out when
+`home_arm.py` reports the framing out of distribution (`--force-framing`
+overrides, for a deliberate OOD probe).
+
+Use `./run_rollout_trial.sh <fresh-tag>
+<checkpoint>`, which homes first and then rolls out under a fresh tag. Anything
+from the `topcam59_sim_real_ratio_v1_*` sweep reaches the peg and fails to grasp
+it: those runs stopped at 20000 steps against a 30000-step decay schedule.
+
+
+`robot_learning/supervised_policy_rollout.py`, through `./hw_docker.sh`, with
+`--confirm-motion` and a person at the power switch:
+
+```bash
+./hw_docker.sh python robot_learning/supervised_policy_rollout.py \
+  --checkpoint outputs/train/<run>/checkpoints/<step>/pretrained_model \
+  --skill place_circle \
+  --output-dir outputs/hardware-test/<tag> \
+  --confirm-motion
+```
+
+**The three parameters that decide whether it can physically do the task**, all
+learned the hard way on 2026-08-19 when a rollout of a good checkpoint moved
+the arm vaguely toward the board and never grasped anything:
+
+- **`--control-hz` must equal the dataset fps** (30 for every circle-insert
+  dataset; check `meta/info.json`). A 50-step chunk is 1.67 s of demonstration.
+  Running it at 10 Hz stretches it over 5.0 s and the arm crawls.
+- **`--max-relative-target` is a per-step rate limit, not a per-chunk budget.**
+  It is passed to `SOFollowerRobotConfig`, which re-reads `Present_Position`
+  before every write. Never re-implement it locally against a state snapshot
+  taken once per chunk: that becomes a positional cage, and the demonstrations
+  move the shoulder a mean of 31.8 deg (max 92.8) over one 50-step chunk, so a
+  +-10 cage throttles the task's main motion to a third of what it needs.
+  Recorded per-step |delta| p99 is 5.84 deg on the shoulder, the fastest joint.
+- **`--max-duration-s` and `--max-chunks` must cover a whole episode.**
+  Demonstrations average 16.0 s (max 28.8 s). The defaults (12 chunks, 60 s)
+  do; the original 6 chunks at 10 Hz ran out mid-approach.
+
+Joint clamps in `robot_learning/*.py` are a backstop against a wild prediction,
+**not** the app's UI slider range. `shoulder` must be at least `-115`: at
+`(-90, 90)` it silently truncated 12.34% of every recorded action, so the
+raised pose that every circle-insert episode *starts* from was unreachable.
+Widen these whenever a new dataset's action range grows.
+
+Diagnose a disappointing rollout **before** running the arm again.
+`./gpu_docker.sh python robot_learning/diagnose_policy_chunk.py --checkpoint <path>`
+replays the checkpoint against held-out demonstrations offline and prints, per
+sampled frame, the chunk the policy wants against the motion the teleoperator
+actually recorded. The rollout manifest also logs `requested` vs `sent` per
+step plus `rate_limited_steps` and `overrun_s` per chunk: if `sent` differs
+from `requested` on many steps the rate limit is binding, and if `overrun_s`
+grows the loop is not holding `--control-hz`.
+
+## Published SO-10x fine-tuning practice, and which parts apply here
+
+Collected 2026-08-20 while diagnosing a policy that approaches correctly and
+misses the grasp. **Checked** means measured against this project's own data;
+treat the rest as reference, not as something already true here.
+
+| claim | source | status here |
+| --- | --- | --- |
+| below ~50 episodes/task the model mostly memorises start positions | Trelis, ggando | applies -- the ratio sweep trained `real_only` on 47, and `train_deploy.sh` now uses all 59 |
+| density beats count: 50 episodes over 30cm failed, 75 over 10cm succeeded | ggando | **checked, does not apply.** Our grasp points span 140 x 125 mm with a median 9 neighbours within 20mm. Already dense; recording more for coverage would be wasted |
+| consistency beats count: 75 clean episodes beat 81 with mixed strategies | ggando | **checked, partly applies.** Median episode disagrees with same-position neighbours by 6.45 deg, but 15 of 57 exceed 8 deg and ep 9 reaches 32 deg. See below |
+| performance is sensitive to lighting differing between recording and evaluation | ggando | **checked, not a factor.** Recorded overview mean 0.509 vs rollout 0.551, gap +0.042 |
+| two cameras beat one (100% vs 80%) | ggando | applies; we have both. Ablation shows the wrist dominates (blanking it moves predictions 4.03 vs the overview's 1.11) |
+| execute only ~15 of a 50-step chunk, replanning every 0.5 s | Trelis (ACT) | **checked, did not help.** `--max-steps-per-chunk 15` hovered for 40 chunks and never closed, where the 50-step version closed 4 times in 5 |
+| 20k steps is a starting point, tune upward; loss often still dropping | LeRobot docs, ggando | applies. Our sweep stopped at 20k against a 30k decay schedule, so every swept checkpoint was frozen mid-decay |
+| ACT sizing of roughly 2.5 training steps per frame | Trelis | reference only, and ACT rather than a pretrained VLA. At 28158 frames it would imply ~70k steps -- an upper bound to consider if 30k underperforms |
+| evaluate with 10 episodes, 30 s each, 30 s reset, 5 s warmup | Trossen | adopt this for scoring; we have no automatic success detector, so eval is counted by watching |
+| a diffusion policy conditions on two observations (t-1, t) to infer direction | Osmulski | reference. This SmolVLA config runs `n_obs_steps=1`; a single frame carries no velocity |
+
+`robot_learning/audit_demo_consistency.py` regenerates the consistency and
+lighting numbers and prints the outlier list. As of 2026-08-20 the episodes that
+disagree most with neighbours grasping within 25mm are **9 (32.0 deg), 32
+(17.3), 45 (13.1), 52 (11.8)** -- ep 9 grasps with the shoulder at +4.4 and the
+elbow at 27.6 where its neighbours use roughly -25 and 40, a genuinely different
+posture for the same target. Dropping just those four leaves 55 episodes, still
+above the 50 floor; the 8-degree threshold flags 15 and would leave 44, which is
+below it. If a clean-subset run is wanted, drop the four, not the fifteen.
+
+An open issue with exactly our symptom -- policy reaches the target and never
+closes -- is Robbyant/lingbot-vla#48. It has no published resolution. The
+unanswered questions there worth knowing about: whether fully unfreezing the
+vision/VLM stack hurts on small datasets, and whether action-dimension
+zero-padding destabilises the gripper channel.
+
 ## Known recurring gotchas
+
+- **`loop.py record --episode-time` defaults to 20s, which silently truncates
+  the end of the task.** On 2026-08-17 this cut 27 of 60 circle-insert episodes
+  off after the grasp and before the insertion, leaving the place phase with
+  only ~33 demonstrations against ~60 for the pick -- and insertion is what the
+  policy then failed at. It is not visible at recording time: the episodes look
+  fine, they just stop early. The numbers: complete episodes grasped at 9.6s
+  mean with 10.3s left to place; truncated ones grasped at 14.6s with 4.1s left.
+  Placement needs 6-10s after the grasp. **Use `--episode-time 30`** so a slow
+  grasp still leaves room to finish. Check any new dataset for this with
+  `robot_learning/audit_demo_consistency.py` before training on it.
+- **Do not "clean" a dataset by dropping its truncated episodes.** Tried
+  2026-08-20: training on only the 30 complete circle-insert episodes scored
+  0/3 on the bench and never transported at all, worse than the 59-episode
+  checkpoint it was meant to improve. 30 is below the ~50 floor and the
+  truncated episodes still carry pick and approach signal. Add complete
+  episodes; do not subtract incomplete ones.
 
 - Reusing a `--tag` from a previous attempt (even a failed/Ctrl-C'd one)
   hits `FileExistsError` — always use a fresh tag.
