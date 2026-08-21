@@ -876,13 +876,29 @@ seated in the pocket from one dropped beside it. Thresholds come from four
 trials on 2026-08-21; widen them if a run lands between them rather than
 trusting the boundary.
 
-**The second failure mode is closing a few degrees too high.** bench5 passed the
-framing gate, approached correctly, and commanded the close with shoulder -3.2
-and elbow 35.9, where all three successes close at shoulder -7 and elbow 40
-(they agree within 1.1 and 0.8 deg respectively). It shut above the peg,
-reopened, re-approached and missed again, knocking the piece out of position.
-Distinct from bench3's hover: there the policy never commanded a close at all.
-Bench score on framing-valid trials is **3 of 4**.
+**The second failure mode is closing a few degrees too high.** bench5 and bench6
+passed the framing gate, approached correctly, and commanded the close at
+shoulder -3.2/elbow 35.9 and shoulder +0.2/elbow 29.1, where all three successes
+close at shoulder -7 and elbow 40 (agreeing within 1.1 and 0.8 deg). They shut
+above the peg, reopened, re-approached and missed again, knocking the piece out
+of position. Both had started low in the wrist frame (y 0.460 and 0.407), which
+is what the `WORKING_WRIST_Y_MIN` floor now blocks. Distinct from bench3's
+hover, where the policy never commanded a close at all.
+
+**A third failure mode has no explanation yet, and it is the important one.**
+bench7 started at y=0.53 -- inside the success band -- closed at shoulder -8.2,
+elbow 39.0, which is the successes' own posture, with the piece measured at
+(0.46, 0.56) in the close frame against the successes' (0.45-0.47, 0.55-0.56).
+Start framing, close posture and close-frame vision were all normal, and the
+gripper still caught nothing. Neither the framing gate nor the height story
+covers it. **The gates are necessary, not sufficient: they remove known ways to
+fail and do not make a trial succeed.** Bench score on framing-valid trials is
+**3 of 6**; restricted to trials that also start above the y floor, 3 of 4.
+
+Before answering an in-band miss with retraining, note what is not yet ruled
+out: the piece sliding on the paper as the gripper descends, and simple
+run-to-run unreliability at a rate a handful of trials cannot resolve. Ten
+trials at a fixed, gate-clean start position would settle which.
 
 Use `./run_rollout_trial.sh <fresh-tag>
 <checkpoint>`, which homes first and then rolls out under a fresh tag. Anything

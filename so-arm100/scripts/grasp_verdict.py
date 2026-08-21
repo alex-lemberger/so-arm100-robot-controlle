@@ -32,6 +32,11 @@ HOLDING_MIN = 6.0      # gripper resting here or above after a close = piece in 
 EMPTY_MAX = 5.0        # at or below = closed on nothing
 TRANSPORT_BASE = 35.0  # base swings below this to carry the piece to the board
 
+# Where the three successes closed, as (centre, half-width). Used only to say
+# whether a failed close was out of posture -- it is not a gate.
+SUCCESS_SHOULDER = (-7.1, 2.0)
+SUCCESS_ELBOW = (40.3, 2.0)
+
 
 def load(out_dir: Path) -> list[dict]:
     manifest = out_dir / "manifest.jsonl"
@@ -71,12 +76,27 @@ def main() -> int:
 
     if after <= EMPTY_MAX:
         s = rows[close]["state"]
+        sh, el = s["shoulder"], s["elbow"]
         print(f"  GRASP FAILED: closed on nothing (gripper {after:.1f}, holding reads "
               f"{HOLDING_MIN:.0f}+).")
-        print(f"         Posture at the close: shoulder {s['shoulder']:.1f}, "
-              f"elbow {s['elbow']:.1f}. The successes so far close at roughly "
-              f"shoulder -7, elbow 40;")
-        print("         several degrees high there means shutting above the peg.")
+        print(f"         Posture at the close: shoulder {sh:.1f}, elbow {el:.1f} "
+              f"(successes: shoulder {SUCCESS_SHOULDER[0]:.0f}+-{SUCCESS_SHOULDER[1]:.0f}, "
+              f"elbow {SUCCESS_ELBOW[0]:.0f}+-{SUCCESS_ELBOW[1]:.0f}).")
+        # Only blame the posture when the posture is actually off. bench7 on
+        # 2026-08-21 closed at shoulder -8.2, elbow 39.0 -- squarely normal --
+        # with the piece correctly framed, and still caught nothing. Saying
+        # "closed too high" there sent the diagnosis in the wrong direction.
+        off_sh = abs(sh - SUCCESS_SHOULDER[0]) > SUCCESS_SHOULDER[1]
+        off_el = abs(el - SUCCESS_ELBOW[0]) > SUCCESS_ELBOW[1]
+        if off_sh or off_el:
+            print("         That is outside the band the successes close in: the "
+                  "gripper shut short of the peg.")
+        else:
+            print("         That is INSIDE the successes' band, so height does not "
+                  "explain this one.")
+            print("         Look at the close chunk's wrist.png -- an in-posture miss "
+                  "means the piece moved,")
+            print("         or the grasp is simply unreliable at this rate.")
         return 1
     if after < HOLDING_MIN:
         print(f"  GRASP UNCLEAR: gripper settled at {after:.1f}, between the empty "

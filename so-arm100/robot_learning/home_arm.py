@@ -56,25 +56,29 @@ HOME_POSE = {
 DEMO_WRIST_Y = (0.482, 0.151)
 DEMO_WRIST_X = (0.41, 0.11)
 
-# The demos' SPREAD is not the policy's TOLERANCE. Measured 2026-08-21 across
-# five bench trials of circle_insert_real80_30k, y at the start pose separates
-# the outcomes perfectly and the close posture tracks it continuously:
+# The demos' SPREAD is not the policy's TOLERANCE. Measured 2026-08-21 over six
+# bench trials of circle_insert_real80_30k, y at the start pose against the
+# posture the gripper closed in:
 #
 #     y 0.537 -> shoulder -7.6, elbow 40.8   grasped
 #     y 0.514 -> shoulder -7.3, elbow 40.2   grasped
 #     y 0.537 -> shoulder -6.5, elbow 40.0   grasped
 #     y 0.460 -> shoulder -3.2, elbow 35.9   closed on nothing
 #     y 0.407 -> shoulder +0.2, elbow 29.1   closed on nothing
+#     y 0.530 -> shoulder -8.2, elbow 39.0   closed on nothing   <- in band
 #
-# As y falls the arm reaches further and shuts above the peg. y=0.407 is only
-# -0.5 sd, so the +-1 sd test passed it and the trial failed anyway. Same effect
-# this file recorded on 2026-08-16 at coarser resolution (0.48 works, 0.27 gave
-# 2/10, 0.11 gave 0/3), and consistent with shoulder_lift correlating with
-# wrist-frame y at r=+0.68.
+# Below ~0.46 the arm reaches further and shuts above the peg, which is the same
+# effect this file recorded on 2026-08-16 at coarser resolution (0.48 works,
+# 0.27 gave 2/10, 0.11 gave 0/3) and matches shoulder_lift correlating with
+# wrist-frame y at r=+0.68. y=0.407 is only -0.5 sd, so the +-1 sd test passed
+# it and the trial failed anyway -- hence this floor.
 #
-# Only three successes sit above this line, so treat it as the best current
-# estimate rather than a measured boundary: the true edge is somewhere in
-# 0.46 < y < 0.51 and more trials should move this number.
+# But the floor is NECESSARY, NOT SUFFICIENT. The last line is bench7: in the
+# success band, closing in the successes' own posture, piece correctly framed,
+# and it still caught nothing. Starting above 0.50 does not make a trial
+# succeed; it only removes one known way to fail. In-band trials ran 3 of 4 at
+# the time of writing, so expect in-band misses and do not read a failure above
+# this line as a framing problem.
 WORKING_WRIST_Y_MIN = 0.50
 
 STEP_DEG = 1.5          # per-tick joint move: slow enough to be stoppable by hand
