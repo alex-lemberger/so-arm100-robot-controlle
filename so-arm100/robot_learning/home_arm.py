@@ -56,6 +56,27 @@ HOME_POSE = {
 DEMO_WRIST_Y = (0.482, 0.151)
 DEMO_WRIST_X = (0.41, 0.11)
 
+# The demos' SPREAD is not the policy's TOLERANCE. Measured 2026-08-21 across
+# five bench trials of circle_insert_real80_30k, y at the start pose separates
+# the outcomes perfectly and the close posture tracks it continuously:
+#
+#     y 0.537 -> shoulder -7.6, elbow 40.8   grasped
+#     y 0.514 -> shoulder -7.3, elbow 40.2   grasped
+#     y 0.537 -> shoulder -6.5, elbow 40.0   grasped
+#     y 0.460 -> shoulder -3.2, elbow 35.9   closed on nothing
+#     y 0.407 -> shoulder +0.2, elbow 29.1   closed on nothing
+#
+# As y falls the arm reaches further and shuts above the peg. y=0.407 is only
+# -0.5 sd, so the +-1 sd test passed it and the trial failed anyway. Same effect
+# this file recorded on 2026-08-16 at coarser resolution (0.48 works, 0.27 gave
+# 2/10, 0.11 gave 0/3), and consistent with shoulder_lift correlating with
+# wrist-frame y at r=+0.68.
+#
+# Only three successes sit above this line, so treat it as the best current
+# estimate rather than a measured boundary: the true edge is somewhere in
+# 0.46 < y < 0.51 and more trials should move this number.
+WORKING_WRIST_Y_MIN = 0.50
+
 STEP_DEG = 1.5          # per-tick joint move: slow enough to be stoppable by hand
 TICK_S = 0.03
 
@@ -142,6 +163,11 @@ def report_wrist(robot) -> None:
     edge = x < 0.15 or x > 0.85 or y < 0.15 or y > 0.85
     if edge:
         print("  AT THE FRAME EDGE -- worse than any demonstration start.")
+    elif y < WORKING_WRIST_Y_MIN:
+        print(f"  BELOW THE WORKING y BAND (y={y:.2f} < {WORKING_WRIST_Y_MIN:.2f}) -- "
+              "inside the demos' spread but")
+        print("  below every trial that has grasped. Move the piece closer; aim for "
+              "y around 0.52-0.55.")
     elif abs(zy) < 1.0 and abs(zx) < 1.0:
         print("  inside the demos' framing. This is the start pose they had.")
     else:

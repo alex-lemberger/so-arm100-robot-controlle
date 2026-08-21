@@ -32,8 +32,8 @@ fi
 # chunks and never closed the gripper. The warning had been printed into
 # /dev/null. Framing is the precision-critical input -- see the 2026-08-16
 # measurement in robot_learning/home_arm.py.
-grep -E "peg in the wrist view|inside the demos|outside the demos|FRAME EDGE" "$HOME_LOG" || true
-if grep -qE "outside the demos' usual framing|AT THE FRAME EDGE" "$HOME_LOG"; then
+grep -E "peg in the wrist view|inside the demos|outside the demos|FRAME EDGE|WORKING y BAND|y around" "$HOME_LOG" || true
+if grep -qE "outside the demos' usual framing|AT THE FRAME EDGE|BELOW THE WORKING y BAND" "$HOME_LOG"; then
   if [ "$FORCE_FRAMING" = "1" ]; then
     echo "framing is out of distribution -- continuing anyway (--force-framing)"
   else
