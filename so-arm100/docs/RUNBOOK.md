@@ -832,20 +832,35 @@ are quietly confounded.
 **The working checkpoint is
 `outputs/train/circle_insert_real80_30k/checkpoints/030000/pretrained_model`**
 (trained by `./train_deploy.sh` on all 80 episodes -- the 59 plus 21 recorded
-for the place phase). On 2026-08-21 it completed the circle-insert task
-autonomously from the home pose on its first bench run, tag `real80_bench1`:
-grasped on chunk 6, transported on 7, released the piece seated in the pocket
-on 10, retreated on 11, no overrun on any chunk. This is the first checkpoint
-to seat the piece rather than stop 5-7mm short.
+for the place phase). It is the best checkpoint measured, and it does complete
+the task: on 2026-08-21 `real80_bench1` grasped on chunk 6, transported on 7,
+released the piece into the pocket on 10 and retreated on 11, with no overrun.
 `circle_insert_real59_30k/checkpoints/030000` also completes the task
 (2026-08-20) and is the fallback if the 80-episode model regresses.
+
+**Do not read that as the 5-7mm insertion gap being closed.** After the first
+two trials it looked closed, and this file said so; ten trials say something
+weaker. Full record in `docs/bench-scores-real80.md`:
+
+- grasped in 6 of 10
+- seated in 5, but only **2 confirmed placed** (bench1, bench2). Two others
+  (fixed02, fixed04) were **slides** -- released off-target, the piece found
+  its own way in -- and one (bench4) was never asked about.
+
+A slide is the policy getting away with an inaccurate release, which is the
+very error the 21 place-phase episodes were meant to remove, so scoring it as
+success hides the thing being measured. Nothing in the manifest distinguishes
+the two: there is no video, the per-chunk stills are 1.7s apart, and the gripper
+occludes the piece in the release frame. **Only a human watching can call it**,
+so record placed/slid/missed per trial at the bench or the number is not
+recoverable afterwards.
 
 Final training loss does **not** rank these: `complete30_30k` had the lowest
 loss of the three (0.015) and scored 0/3 on the bench, where `real80_30k` has
 the highest (0.033) and works. Only the bench ranks a checkpoint.
 
 **Wrist framing at the start decides the trial, and joint-space coverage does
-not.** Bench score on 2026-08-21 was 2/3. The failure (`real80_bench3`) stalled
+not.** The failure (`real80_bench3`) stalled
 at a joint posture 0.6 deg from a demonstrated grasp with 51 demos within
 10 deg -- the *best*-covered of the three trials, better than either success.
 What differed was the wrist view: the piece sat at x=0.66 (+2.3 sd against
@@ -892,8 +907,18 @@ elbow 39.0, which is the successes' own posture, with the piece measured at
 Start framing, close posture and close-frame vision were all normal, and the
 gripper still caught nothing. Neither the framing gate nor the height story
 covers it. **The gates are necessary, not sufficient: they remove known ways to
-fail and do not make a trial succeed.** Bench score on framing-valid trials is
-**3 of 6**; restricted to trials that also start above the y floor, 3 of 4.
+fail and do not make a trial succeed.** Full score across all ten trials is in
+`docs/bench-scores-real80.md`: grasped 6 of 10, seated 5, confirmed placed 2.
+
+**The y floor is not supported either.** `fixed03` grasped, transported and got
+the piece to the board from y=0.45 -- below `WORKING_WRIST_Y_MIN`, so the gate
+would have refused a trial that worked. And on `fixed04` the gate's own
+measurement was wrong: `home_arm.py` locked onto the board's pocket and reported
+the peg at x=0.07 when the wrist frame plainly shows it at x=0.44, which would
+have refused a trial that succeeded. Treat the framing gate as an advisory
+reading that needs the wrist frame checked, not an authority; `--force-framing`
+exists for exactly this. Trust start-y only when measured off `chunk-00/wrist.png`
+with the pocket region excluded.
 
 Before answering an in-band miss with retraining, note what is not yet ruled
 out: the piece sliding on the paper as the gripper descends, and simple
