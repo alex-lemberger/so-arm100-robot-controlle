@@ -51,3 +51,10 @@ rm -f "$HOME_LOG"
   --prompt "Pick up the circle piece and place it in its matching pocket." \
   --output-dir "$OUT" --confirm-motion "$@" 2>&1 \
   | grep -E "Completed supervised policy chunk|STOPPED|Disconnected"
+
+# The grasp is machine-checkable even though the insertion is not: a gripper
+# closing onto the 13mm knob stops at ~7.5, and one closing on air goes to ~2.4.
+# Never let a trial be scored without this -- bench5 on 2026-08-21 ran all 12
+# chunks, reported no error, and had closed on nothing twice.
+echo
+python3 scripts/grasp_verdict.py "$OUT" || true

@@ -859,6 +859,31 @@ and the camera was not. `run_rollout_trial.sh` now refuses to roll out when
 `home_arm.py` reports the framing out of distribution (`--force-framing`
 overrides, for a deliberate OOD probe).
 
+**The grasp IS machine-checkable, even though the insertion is not.** A gripper
+closing onto the 13mm knob stops where the knob is; one closing on air does not:
+
+| trial | gripper after the close | outcome |
+| --- | --- | --- |
+| bench1, bench2, bench4 | 7.4, 7.4, 7.6 | holding the piece |
+| bench5 | 2.4 | closed on nothing, twice |
+
+No overlap. `scripts/grasp_verdict.py <output-dir>` reads this off the manifest
+and also checks transport (every success swung the base to ~25 afterwards; the
+failure never left the 48-55 band it grasped in). `run_rollout_trial.sh` runs it
+automatically at the end of every trial. Insertion still has to be confirmed by
+eye or from the final `overview.png` -- nothing logged distinguishes a piece
+seated in the pocket from one dropped beside it. Thresholds come from four
+trials on 2026-08-21; widen them if a run lands between them rather than
+trusting the boundary.
+
+**The second failure mode is closing a few degrees too high.** bench5 passed the
+framing gate, approached correctly, and commanded the close with shoulder -3.2
+and elbow 35.9, where all three successes close at shoulder -7 and elbow 40
+(they agree within 1.1 and 0.8 deg respectively). It shut above the peg,
+reopened, re-approached and missed again, knocking the piece out of position.
+Distinct from bench3's hover: there the policy never commanded a close at all.
+Bench score on framing-valid trials is **3 of 4**.
+
 Use `./run_rollout_trial.sh <fresh-tag>
 <checkpoint>`, which homes first and then rolls out under a fresh tag. Anything
 from the `topcam59_sim_real_ratio_v1_*` sweep reaches the peg and fails to grasp
